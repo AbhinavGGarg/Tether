@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Nudge Learning Copilot",
+  "version": "0.1.0",
+  "description": "Real-time learning intervention overlay for coding and study workflows.",
+  "permissions": ["storage", "tabs", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "Nudge",
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

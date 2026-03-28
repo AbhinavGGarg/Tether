@@ -137,3 +137,20 @@ Socket events:
 - This is optimized for demo impact and responsiveness.
 - Detection thresholds are interpretable and easy to tune.
 - Current storage is in-memory; production version can swap to Postgres/Redis.
+
+## Chrome extension MVP
+
+Nudge now includes a Chrome extension scaffold in `extension/` that:
+
+- tracks typing/pauses/edit churn on pages you use,
+- runs live issue detection in a background worker,
+- shows interventions in an on-page floating widget,
+- shows live metrics and intervention timeline in the extension popup.
+
+### Load extension locally
+
+1. Open Chrome and go to `chrome://extensions`.
+2. Turn on **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the `extension` folder from this repo.
+5. Open any coding/study page and click the Nudge extension icon to see live status.
