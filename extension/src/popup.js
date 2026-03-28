@@ -1,4 +1,6 @@
 const el = {
+  tetherToggle: document.getElementById("tether-enabled"),
+  tetherStatus: document.getElementById("tether-status"),
   tabUrl: document.getElementById("tab-url"),
   activity: document.getElementById("activity"),
   category: document.getElementById("category"),
@@ -18,6 +20,8 @@ const el = {
 };
 
 let activeTabId = null;
+let tetherEnabled = true;
+const STORAGE_TETHER_ENABLED_KEY = "tether_enabled";
 
 init().catch(() => {
   el.tabUrl.textContent = "Unable to read active tab.";
@@ -33,10 +37,40 @@ async function init() {
   activeTabId = tab.id;
   el.tabUrl.textContent = shortenUrl(tab.url || "Unknown tab");
 
+  await syncPowerState();
+  if (el.tetherToggle) {
+    el.tetherToggle.checked = tetherEnabled;
+    el.tetherToggle.addEventListener("change", async (event) => {
+      tetherEnabled = Boolean(event.target.checked);
+      await chrome.storage.local.set({ [STORAGE_TETHER_ENABLED_KEY]: tetherEnabled });
+      applyPowerUi();
+      if (tetherEnabled) {
+        await refresh();
+      } else {
+        renderDisabledState();
+      }
+    });
+  }
+
   await refresh();
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local" || !activeTabId) {
+    if (areaName !== "local") {
+      return;
+    }
+
+    if (changes[STORAGE_TETHER_ENABLED_KEY]) {
+      tetherEnabled = changes[STORAGE_TETHER_ENABLED_KEY].newValue !== false;
+      applyPowerUi();
+      if (tetherEnabled) {
+        void refresh();
+      } else {
+        renderDisabledState();
+      }
+      return;
+    }
+
+    if (!activeTabId || !tetherEnabled) {
       return;
     }
 
@@ -54,12 +88,22 @@ async function refresh() {
     return;
   }
 
+  if (!tetherEnabled) {
+    renderDisabledState();
+    return;
+  }
+
   const key = `nudge_tab_${activeTabId}`;
   const result = await chrome.storage.local.get([key]);
   render(result[key] || null);
 }
 
 function render(state) {
+  if (!tetherEnabled) {
+    renderDisabledState();
+    return;
+  }
+
   if (!state) {
     el.activity.textContent = "activity: none_detected";
     el.category.textContent = "category: unknown";
@@ -150,6 +194,44 @@ function render(state) {
       `
     )
     .join("");
+}
+
+function renderDisabledState() {
+  el.activity.textContent = "activity: monitoring_off";
+  el.category.textContent = "category: disabled";
+  el.domain.textContent = "domain: --";
+  el.issue.textContent = "Tether is off";
+  el.friction.textContent = "0%";
+  el.frictionBar.style.width = "0%";
+  el.focus.textContent = "0%";
+  el.focusBar.style.width = "0%";
+  el.typing.textContent = "0 keys/s";
+  el.idle.textContent = "0s";
+  el.switches.textContent = "0";
+  el.latest.className = "empty";
+  el.latest.textContent = "Monitoring is paused.";
+  el.detailedSummary.textContent = "Turn Tether on to resume tracking.";
+  el.timeline.className = "empty";
+  el.timeline.textContent = "No events while Tether is off.";
+}
+
+async function syncPowerState() {
+  try {
+    const result = await chrome.storage.local.get([STORAGE_TETHER_ENABLED_KEY]);
+    tetherEnabled = result[STORAGE_TETHER_ENABLED_KEY] !== false;
+  } catch {
+    tetherEnabled = true;
+  }
+  applyPowerUi();
+}
+
+function applyPowerUi() {
+  if (el.tetherToggle) {
+    el.tetherToggle.checked = tetherEnabled;
+  }
+  if (el.tetherStatus) {
+    el.tetherStatus.textContent = tetherEnabled ? "On" : "Off";
+  }
 }
 
 function formatEventType(value) {

@@ -41,6 +41,7 @@ function WorkspacePage() {
   const [focusModeRunning, setFocusModeRunning] = useState(false);
   const [focusModeSeconds, setFocusModeSeconds] = useState(60);
   const [focusModeDuration, setFocusModeDuration] = useState(60);
+  const [tetherEnabled, setTetherEnabled] = useState(true);
   const [browserNotifications, setBrowserNotifications] = useState({
     enabled: true,
     mode: "Normal"
@@ -247,6 +248,40 @@ function WorkspacePage() {
       return;
     }
 
+    if (!tetherEnabled) {
+      reminderSequenceRef.current.active = null;
+      setActiveIntervention(null);
+      setLiveInterventionDetail("");
+      setFocusModeRunning(false);
+      setFocusModeSeconds(0);
+      setSignal((prev) => ({
+        ...prev,
+        issueType: null,
+        issueDisplayType: null,
+        issueSeverity: null,
+        statusLabel: "Monitoring off"
+      }));
+      setImpactNote("Tether is off. No monitoring is running.");
+      setBrowserNotificationStatus("Tether is off. Monitoring and reminders paused.");
+      addBrowserNotificationEvent("tether_disabled", "Tether turned off", "All monitoring loops paused.");
+      return;
+    }
+
+    setSignal((prev) => ({
+      ...prev,
+      statusLabel: "Live monitoring"
+    }));
+    setBrowserNotificationStatus(
+      browserNotifications.enabled ? `Browser notifications running in ${browserNotifications.mode} mode.` : "Browser notifications are off."
+    );
+    addBrowserNotificationEvent("tether_enabled", "Tether turned on", "Monitoring loops resumed.");
+  }, [addBrowserNotificationEvent, browserNotifications.enabled, browserNotifications.mode, sessionId, tetherEnabled]);
+
+  useEffect(() => {
+    if (!sessionId || !tetherEnabled) {
+      return;
+    }
+
     const timer = setInterval(() => {
       const now = Date.now();
       const tenSecondsAgo = now - 10000;
@@ -327,10 +362,10 @@ function WorkspacePage() {
     }, 2000);
 
     return () => clearInterval(timer);
-  }, [sessionId]);
+  }, [sessionId, tetherEnabled]);
 
   useEffect(() => {
-    if (!sessionId) {
+    if (!sessionId || !tetherEnabled) {
       return;
     }
 
@@ -385,7 +420,7 @@ function WorkspacePage() {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("visibilitychange", onVisibilityChange, true);
     };
-  }, [sessionId]);
+  }, [sessionId, tetherEnabled]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -432,7 +467,7 @@ function WorkspacePage() {
   }, [addRiskTimelineEvent, riskState.level, sessionId]);
 
   useEffect(() => {
-    if (!focusModeRunning) {
+    if (!focusModeRunning || !tetherEnabled) {
       return;
     }
 
@@ -451,11 +486,15 @@ function WorkspacePage() {
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [addRiskTimelineEvent, focusModeRunning]);
+  }, [addRiskTimelineEvent, focusModeRunning, tetherEnabled]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) {
       setBrowserNotificationPermission("unsupported");
+      return;
+    }
+
+    if (!tetherEnabled) {
       return;
     }
 
@@ -475,10 +514,10 @@ function WorkspacePage() {
         );
       });
     }
-  }, [addBrowserNotificationEvent, browserNotifications.enabled]);
+  }, [addBrowserNotificationEvent, browserNotifications.enabled, tetherEnabled]);
 
   useEffect(() => {
-    if (!sessionId) {
+    if (!sessionId || !tetherEnabled) {
       return;
     }
 
@@ -608,12 +647,17 @@ function WorkspacePage() {
     browserNotifications.enabled,
     browserNotifications.mode,
     telemetry.timeOnTaskMs,
-    telemetry.typingSpeed
+    telemetry.typingSpeed,
+    tetherEnabled
   ]);
 
   function handleInterventionAction(intervention, action) {
     if (!intervention || !sessionId) {
       return "";
+    }
+
+    if (!tetherEnabled) {
+      return "Tether is off. Turn it back on to run interventions.";
     }
 
     const update = markInterventionApplied(sessionId, intervention.id, action);
@@ -716,6 +760,11 @@ function WorkspacePage() {
       return;
     }
 
+    if (!tetherEnabled) {
+      setImpactNote("Tether is off. Turn it on to run focus and recovery actions.");
+      return;
+    }
+
     if (action === "start_focus_mode") {
       if (!focusModeRunning) {
         setFocusModeRunning(true);
@@ -748,6 +797,11 @@ function WorkspacePage() {
   }
 
   function handleBrowserNotificationsToggle(enabled) {
+    if (!tetherEnabled) {
+      setBrowserNotificationStatus("Turn Tether on first, then enable browser notifications.");
+      return;
+    }
+
     setBrowserNotifications((prev) => ({ ...prev, enabled }));
 
     if (!enabled) {
@@ -820,7 +874,9 @@ function WorkspacePage() {
 
   const issueLabel = signal.issueType
     ? `${(signal.issueDisplayType || signal.issueType).replaceAll("_", " ")} (${signal.issueSeverity || "low"})`
-    : "No active issue";
+    : tetherEnabled
+      ? "No active issue"
+      : "Monitoring off";
 
   const behaviorRiskPct = Math.round(
     Math.max(
@@ -843,10 +899,20 @@ function WorkspacePage() {
           <p>Catch drift early. Recover focus instantly.</p>
         </div>
         <div className="status-cluster">
-          <span className={`status-pill ${connected ? "online" : "offline"}`}>
-            {connected ? "Live Monitoring" : "Session not started"}
+          <span className={`status-pill ${connected && tetherEnabled ? "online" : "offline"}`}>
+            {connected ? (tetherEnabled ? "Live Monitoring" : "Tether Off") : "Session not started"}
           </span>
           {learnerName ? <span className="status-pill online">Operator: {learnerName}</span> : null}
+          {sessionId ? (
+            <label className="master-power-toggle">
+              <span>Tether Power</span>
+              <input
+                type="checkbox"
+                checked={tetherEnabled}
+                onChange={(event) => setTetherEnabled(event.target.checked)}
+              />
+            </label>
+          ) : null}
           {sessionId ? (
             <button className="btn btn-ghost" onClick={openLiveResults}>
               View your real live results
@@ -1113,6 +1179,7 @@ function WorkspacePage() {
                       type="checkbox"
                       checked={browserNotifications.enabled}
                       onChange={(event) => handleBrowserNotificationsToggle(event.target.checked)}
+                      disabled={!tetherEnabled}
                     />
                   </label>
                   <label className="risk-field">
@@ -1120,13 +1187,14 @@ function WorkspacePage() {
                     <select
                       value={browserNotifications.mode}
                       onChange={(event) => handleBrowserNotificationMode(event.target.value)}
-                      disabled={!browserNotifications.enabled}
+                      disabled={!browserNotifications.enabled || !tetherEnabled}
                     >
                       <option value="Normal">Normal</option>
                       <option value="Focus">Focus</option>
                       <option value="Chill">Chill</option>
                     </select>
                   </label>
+                  {!tetherEnabled ? <p className="monitor-note">Tether is off. Nothing is running.</p> : null}
                   <p className="monitor-note">
                     Browser permission: <strong>{browserNotificationPermission}</strong>
                   </p>

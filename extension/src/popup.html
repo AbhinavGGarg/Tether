@@ -155,6 +155,13 @@
       <section class="top">
         <p class="title">Tether Context Monitor</p>
         <p class="sub" id="tab-url">Waiting for active tab...</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+          <strong style="font-size:12px;">Tether Power</strong>
+          <label style="display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);">
+            <span id="tether-status">On</span>
+            <input id="tether-enabled" type="checkbox" checked />
+          </label>
+        </div>
         <div class="tag-row">
           <span class="tag" id="activity">activity: none_detected</span>
           <span class="tag" id="category">category: unknown</span>

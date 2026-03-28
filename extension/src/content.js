@@ -2,6 +2,7 @@ const NUDGE_TAG = "nudge-extension-root";
 const NUDGE_DOCK_TAG = "nudge-extension-dock";
 const BRAND_NAME = "Tether";
 const LIVE_PAGE_SOURCE_URL = "https://nudge-frontend-ten.vercel.app/";
+const STORAGE_TETHER_ENABLED_KEY = "tether_enabled";
 const BLOCKED_MONITOR_PAGES = [
   { host: "accounts.google.com", pathPrefix: "/v3/signin" },
   { host: "accounts.google.com", pathPrefix: "/ServiceLogin" },
@@ -42,6 +43,11 @@ let dockPanel;
 let dockOpen = false;
 let noteTimerId = null;
 let currentPageKey = buildPageKey(window.location);
+let tetherEnabled = true;
+let activityListenersAttached = false;
+let inactivityIntervalId = null;
+let metricsIntervalId = null;
+let uiPresenceIntervalId = null;
 let interruptionEvents = [];
 let interruptionStats = {
   lostFocusCount: 0,
@@ -57,20 +63,13 @@ function boot() {
     return;
   }
 
-  createCenteredPopup();
-  createDock();
-  renderDock();
-
-  document.addEventListener("mousemove", onMouseMove, true);
-  document.addEventListener("keydown", onKeyDown, true);
-  document.addEventListener("click", onClick, true);
-  document.addEventListener("input", onInput, true);
-  document.addEventListener("scroll", onScroll, true);
-  document.addEventListener("visibilitychange", onVisibilityChange, true);
-
-  setInterval(checkInactivity, 1000);
-  setInterval(publishMetrics, 2000);
-  setInterval(ensureUiPresence, 2000);
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local" || !changes[STORAGE_TETHER_ENABLED_KEY]) {
+      return;
+    }
+    const nextEnabled = changes[STORAGE_TETHER_ENABLED_KEY].newValue !== false;
+    applyTetherPower(nextEnabled);
+  });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || !message.type) {
@@ -82,6 +81,116 @@ function boot() {
       sendResponse({ ok: true, ignored: true });
     }
   });
+
+  chrome.storage.local.get([STORAGE_TETHER_ENABLED_KEY], (result) => {
+    const enabled = result?.[STORAGE_TETHER_ENABLED_KEY] !== false;
+    applyTetherPower(enabled);
+  });
+}
+
+function applyTetherPower(enabled) {
+  tetherEnabled = Boolean(enabled);
+
+  if (!tetherEnabled) {
+    stopMonitoringLoops();
+    detachActivityListeners();
+    if (lockInTimerId) {
+      clearInterval(lockInTimerId);
+      lockInTimerId = null;
+    }
+    lockInRemainingSec = 0;
+    issueActive = false;
+    currentIssue = null;
+    lastActionNote = "Tether is off.";
+    hidePopup();
+    removeDockAndPopup();
+    return;
+  }
+
+  lastActivityTime = Date.now();
+  lastInteractionAt = lastActivityTime;
+  lastInputAt = lastActivityTime;
+  attachActivityListeners();
+  startMonitoringLoops();
+
+  if (!document.getElementById(NUDGE_TAG)) {
+    createCenteredPopup();
+  }
+  if (!document.getElementById(NUDGE_DOCK_TAG)) {
+    createDock();
+  }
+  renderDock();
+}
+
+function attachActivityListeners() {
+  if (activityListenersAttached) {
+    return;
+  }
+  document.addEventListener("mousemove", onMouseMove, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("click", onClick, true);
+  document.addEventListener("input", onInput, true);
+  document.addEventListener("scroll", onScroll, true);
+  document.addEventListener("visibilitychange", onVisibilityChange, true);
+  activityListenersAttached = true;
+}
+
+function detachActivityListeners() {
+  if (!activityListenersAttached) {
+    return;
+  }
+  document.removeEventListener("mousemove", onMouseMove, true);
+  document.removeEventListener("keydown", onKeyDown, true);
+  document.removeEventListener("click", onClick, true);
+  document.removeEventListener("input", onInput, true);
+  document.removeEventListener("scroll", onScroll, true);
+  document.removeEventListener("visibilitychange", onVisibilityChange, true);
+  activityListenersAttached = false;
+}
+
+function startMonitoringLoops() {
+  if (!inactivityIntervalId) {
+    inactivityIntervalId = setInterval(checkInactivity, 1000);
+  }
+  if (!metricsIntervalId) {
+    metricsIntervalId = setInterval(publishMetrics, 2000);
+  }
+  if (!uiPresenceIntervalId) {
+    uiPresenceIntervalId = setInterval(ensureUiPresence, 2000);
+  }
+}
+
+function stopMonitoringLoops() {
+  if (inactivityIntervalId) {
+    clearInterval(inactivityIntervalId);
+    inactivityIntervalId = null;
+  }
+  if (metricsIntervalId) {
+    clearInterval(metricsIntervalId);
+    metricsIntervalId = null;
+  }
+  if (uiPresenceIntervalId) {
+    clearInterval(uiPresenceIntervalId);
+    uiPresenceIntervalId = null;
+  }
+}
+
+function removeDockAndPopup() {
+  const existingDock = document.getElementById(NUDGE_DOCK_TAG);
+  if (existingDock) {
+    existingDock.remove();
+  }
+  const existingPopup = document.getElementById(NUDGE_TAG);
+  if (existingPopup) {
+    existingPopup.remove();
+  }
+  dock = null;
+  dockButton = null;
+  dockPanel = null;
+  overlay = null;
+  overlayCard = null;
+  overlayBody = null;
+  dockOpen = false;
 }
 
 function onMouseMove(event) {
@@ -168,6 +277,9 @@ function onVisibilityChange() {
 }
 
 function registerActivity(clearIssue = true) {
+  if (!tetherEnabled) {
+    return;
+  }
   const now = Date.now();
   lastActivityTime = now;
   lastInteractionAt = now;
@@ -177,6 +289,9 @@ function registerActivity(clearIssue = true) {
 }
 
 function checkInactivity() {
+  if (!tetherEnabled) {
+    return;
+  }
   const pageKey = buildPageKey(window.location);
   if (pageKey !== currentPageKey) {
     resetForPageChange(pageKey);
@@ -397,7 +512,7 @@ function createDock() {
 }
 
 function renderDock() {
-  if (!dock || !dockButton || !dockPanel) {
+  if (!tetherEnabled || !dock || !dockButton || !dockPanel) {
     return;
   }
 
@@ -477,7 +592,7 @@ function createCenteredPopup() {
 }
 
 function renderPopup() {
-  if (!overlay || !overlayBody || !currentIssue || !issueActive) {
+  if (!tetherEnabled || !overlay || !overlayBody || !currentIssue || !issueActive) {
     return;
   }
 
@@ -526,6 +641,9 @@ function hidePopup() {
 }
 
 function publishMetrics() {
+  if (!tetherEnabled) {
+    return;
+  }
   const now = Date.now();
   const tenSec = now - 10000;
   const twentySec = now - 20000;
@@ -577,6 +695,9 @@ function publishMetrics() {
 }
 
 function ensureUiPresence() {
+  if (!tetherEnabled) {
+    return;
+  }
   if (shouldSkipMonitoringPage(window.location)) {
     return;
   }

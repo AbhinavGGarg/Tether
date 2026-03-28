@@ -2,6 +2,7 @@ const tabSessions = new Map();
 
 const LIVE_RESULTS_URL = "https://nudge-frontend-ten.vercel.app";
 const BRAND_NAME = "Tether";
+const STORAGE_TETHER_ENABLED_KEY = "tether_enabled";
 const STRICT_INACTIVITY_MS = 60 * 1000;
 const SECONDARY_INACTIVITY_MS = 150 * 1000;
 const INACTIVITY_NOTIFICATION_COOLDOWN_MS = 90 * 1000;
@@ -23,7 +24,14 @@ const ACTION_SNOOZE_MS = {
 };
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ nudge_ready: true, nudge_version: "3.0.0" });
+  chrome.storage.local.get([STORAGE_TETHER_ENABLED_KEY], (result) => {
+    const nextEnabled = result[STORAGE_TETHER_ENABLED_KEY] !== false;
+    chrome.storage.local.set({
+      nudge_ready: true,
+      nudge_version: "3.0.0",
+      [STORAGE_TETHER_ENABLED_KEY]: nextEnabled
+    });
+  });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -98,6 +106,33 @@ async function handleMetricsMessage(message, sender) {
     return { ok: false };
   }
 
+  const tetherEnabled = await getTetherEnabled();
+  if (!tetherEnabled) {
+    const session = ensureSession(tabId, sender?.tab?.url || "", sender?.tab?.title || "");
+    session.lastSignal = {
+      issueType: null,
+      issueDisplayType: null,
+      issueSeverity: null,
+      statusLabel: "Tether off",
+      procrastinationScore: 0,
+      distractionScore: 0,
+      focusScore: 72,
+      focusImprovementPct: 0
+    };
+    session.updatedAt = Date.now();
+    await persistState(tabId, session);
+
+    return {
+      ok: true,
+      tetherEnabled: false,
+      signal: session.lastSignal,
+      intervention: null,
+      context: session.context,
+      timeline: session.timeline.slice(0, 10),
+      liveResultsUrl: LIVE_RESULTS_URL
+    };
+  }
+
   const session = ensureSession(tabId, sender?.tab?.url || "", sender?.tab?.title || "");
   const metrics = normalizeMetrics(message.metrics || {}, sender?.tab);
   const context = classifyContext(metrics, sender?.tab);
@@ -159,6 +194,7 @@ async function handleMetricsMessage(message, sender) {
 
   return {
     ok: true,
+    tetherEnabled: true,
     signal,
     intervention,
     context,
@@ -171,6 +207,11 @@ async function handleActionMessage(message, sender) {
   const tabId = sender?.tab?.id;
   if (typeof tabId !== "number") {
     return { ok: false };
+  }
+
+  const tetherEnabled = await getTetherEnabled();
+  if (!tetherEnabled) {
+    return { ok: true, tetherEnabled: false };
   }
 
   const session = ensureSession(tabId, sender?.tab?.url || "", sender?.tab?.title || "");
@@ -242,12 +283,22 @@ async function handleActionMessage(message, sender) {
 
   return {
     ok: true,
+    tetherEnabled: true,
     signal: session.lastSignal,
     context: session.context,
     intervention: target,
     timeline: session.timeline.slice(0, 10),
     liveResultsUrl: LIVE_RESULTS_URL
   };
+}
+
+async function getTetherEnabled() {
+  try {
+    const result = await chrome.storage.local.get([STORAGE_TETHER_ENABLED_KEY]);
+    return result[STORAGE_TETHER_ENABLED_KEY] !== false;
+  } catch {
+    return true;
+  }
 }
 
 function ensureSession(tabId, url, title) {
