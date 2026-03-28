@@ -26,6 +26,7 @@ function WorkspacePage() {
   const [gradesInput, setGradesInput] = useState({
     currentGrade: "B+",
     upcomingAssessment: "",
+    upcomingAssessmentDate: "",
     gradePortalLink: "",
     courseGrades: buildEmptyCourseGrades()
   });
@@ -113,12 +114,22 @@ function WorkspacePage() {
         currentGrade: gradesInput.currentGrade,
         courseGrades: gradesInput.courseGrades,
         upcomingAssessment: gradesInput.upcomingAssessment,
+        upcomingAssessmentDate: gradesInput.upcomingAssessmentDate,
         signal,
         telemetry,
         context,
         riskAdjustment
       }),
-    [gradesInput.currentGrade, gradesInput.courseGrades, gradesInput.upcomingAssessment, signal, telemetry, context, riskAdjustment]
+    [
+      gradesInput.currentGrade,
+      gradesInput.courseGrades,
+      gradesInput.upcomingAssessment,
+      gradesInput.upcomingAssessmentDate,
+      signal,
+      telemetry,
+      context,
+      riskAdjustment
+    ]
   );
 
   const combinedTimeline = useMemo(() => {
@@ -219,6 +230,7 @@ function WorkspacePage() {
       setGradesInput({
         currentGrade: "B+",
         upcomingAssessment: "",
+        upcomingAssessmentDate: "",
         gradePortalLink: "",
         courseGrades: buildEmptyCourseGrades()
       });
@@ -682,14 +694,26 @@ function handleInterventionAction(intervention, action) {
   }
 
   function handleAnalyzePortalLink() {
-    const parsed = parseGradeFromPortalLink(gradesInput.gradePortalLink, gradesInput.currentGrade);
+    const fallbackGrade = deriveFallbackGrade(gradesInput.courseGrades, gradesInput.currentGrade);
+    const parsed = parseGradeFromPortalLink(gradesInput.gradePortalLink, fallbackGrade);
     if (!gradesInput.gradePortalLink.trim()) {
       setPortalStatus("Add a grade portal link to simulate parsing.");
       return;
     }
 
     if (parsed.grade) {
-      setGradesInput((prev) => ({ ...prev, currentGrade: parsed.grade }));
+      setGradesInput((prev) => {
+        const firstEmptyIndex = prev.courseGrades.findIndex((entry) => !entry.grade);
+        const targetIndex = firstEmptyIndex >= 0 ? firstEmptyIndex : 0;
+
+        return {
+          ...prev,
+          currentGrade: parsed.grade,
+          courseGrades: prev.courseGrades.map((entry, index) =>
+            index === targetIndex ? { ...entry, grade: parsed.grade } : entry
+          )
+        };
+      });
       setPortalStatus(parsed.message);
       addRiskTimelineEvent("grade_parsed", `Portal grade parsed (${parsed.grade})`, parsed.source);
     } else {
@@ -714,7 +738,11 @@ function handleInterventionAction(intervention, action) {
     }
 
     if (action === "create_recovery_plan") {
-      const plan = buildRecoveryPlan(riskState, context, gradesInput.upcomingAssessment);
+      const plan = buildRecoveryPlan(
+        riskState,
+        context,
+        formatAssessmentTarget(gradesInput.upcomingAssessment, gradesInput.upcomingAssessmentDate)
+      );
       setRecoveryPlan(plan);
       setRiskAdjustment((current) => Math.min(0.45, current + 0.09));
       addRiskTimelineEvent("recovery_plan_started", "Recovery plan started", "Generated a 3-step recovery plan.");
@@ -1087,22 +1115,6 @@ function handleInterventionAction(intervention, action) {
 
                 <div className="risk-input-grid">
                   <label className="risk-field">
-                    Current grade
-                    <select
-                      value={gradesInput.currentGrade}
-                      onChange={(event) =>
-                        setGradesInput((prev) => ({ ...prev, currentGrade: event.target.value }))
-                      }
-                    >
-                      {GRADE_OPTIONS.map((grade) => (
-                        <option key={grade} value={grade}>
-                          {grade}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="risk-field">
                     Upcoming assessment (optional)
                     <input
                       type="text"
@@ -1111,6 +1123,17 @@ function handleInterventionAction(intervention, action) {
                         setGradesInput((prev) => ({ ...prev, upcomingAssessment: event.target.value }))
                       }
                       placeholder="e.g. Calculus Midterm - Apr 4"
+                    />
+                  </label>
+
+                  <label className="risk-field">
+                    Assessment date (optional)
+                    <input
+                      type="date"
+                      value={gradesInput.upcomingAssessmentDate}
+                      onChange={(event) =>
+                        setGradesInput((prev) => ({ ...prev, upcomingAssessmentDate: event.target.value }))
+                      }
                     />
                   </label>
 
@@ -1379,15 +1402,27 @@ function estimateWastedMinutes(signal, telemetry) {
   return Math.max(1, Math.round(base * (0.6 + friction)));
 }
 
-function computeGradesRiskState({ currentGrade, courseGrades, upcomingAssessment, signal, telemetry, context, riskAdjustment }) {
+function computeGradesRiskState({
+  currentGrade,
+  courseGrades,
+  upcomingAssessment,
+  upcomingAssessmentDate,
+  signal,
+  telemetry,
+  context,
+  riskAdjustment
+}) {
   const filledCourseGrades = (courseGrades || []).map((entry) => entry.grade).filter((value) => GRADE_OPTIONS.includes(value));
-  const gradeSamples = [currentGrade, ...filledCourseGrades].filter((value) => GRADE_OPTIONS.includes(value));
+  const fallbackGrade = GRADE_OPTIONS.includes(currentGrade) ? currentGrade : "B+";
+  const gradeSamples = filledCourseGrades.length > 0 ? filledCourseGrades : [fallbackGrade];
   const gradeRisk =
     gradeSamples.length > 0
       ? gradeSamples.reduce((sum, grade) => sum + gradeToRisk(grade), 0) / gradeSamples.length
-      : gradeToRisk(currentGrade);
+      : gradeToRisk(fallbackGrade);
   const gradeLabel =
-    filledCourseGrades.length > 0 ? `${currentGrade} baseline + ${filledCourseGrades.length} course grades` : currentGrade;
+    filledCourseGrades.length > 0
+      ? `${filledCourseGrades.length} course grade${filledCourseGrades.length > 1 ? "s" : ""} entered`
+      : `baseline ${fallbackGrade}`;
   const behaviorRisk = Math.max(
     signal.procrastinationScore || 0,
     signal.distractionScore || 0,
@@ -1413,12 +1448,14 @@ function computeGradesRiskState({ currentGrade, courseGrades, upcomingAssessment
     level = "Moderate";
   }
 
+  const assessmentTarget = formatAssessmentTarget(upcomingAssessment, upcomingAssessmentDate);
+
   let predictedOutcome = `Your current pattern supports steady performance around ${gradeLabel}.`;
   if (level === "Moderate") {
     predictedOutcome = `Based on your grade profile (${gradeLabel}) and recent behavior, continued interruptions may lower your next assessment performance.`;
   }
   if (level === "High") {
-    predictedOutcome = `Your current pace suggests incomplete coverage before ${upcomingAssessment || "your next assessment"} unless focus stabilizes.`;
+    predictedOutcome = `Your current pace suggests incomplete coverage before ${assessmentTarget} unless focus stabilizes.`;
   }
 
   const explanation = `Current grade signal (${gradeLabel}) plus ${context.activityType} behavior indicates ${level.toLowerCase()} academic risk.`;
@@ -1475,6 +1512,50 @@ function buildRecoveryPlan(riskState, context, upcomingAssessment) {
     `Attempt 1 practice problem and check progress before ${target}.`,
     `Apply the recommendation: ${riskState.recommendation}`
   ];
+}
+
+function deriveFallbackGrade(courseGrades, baselineGrade) {
+  const firstCourseGrade = (courseGrades || []).map((entry) => entry.grade).find((grade) => GRADE_OPTIONS.includes(grade));
+  if (firstCourseGrade) {
+    return firstCourseGrade;
+  }
+  if (GRADE_OPTIONS.includes(baselineGrade)) {
+    return baselineGrade;
+  }
+  return "B+";
+}
+
+function formatAssessmentTarget(name, dateValue) {
+  const cleanName = String(name || "").trim();
+  const cleanDate = String(dateValue || "").trim();
+
+  if (!cleanDate && !cleanName) {
+    return "your next assessment";
+  }
+
+  if (!cleanDate) {
+    return cleanName;
+  }
+
+  const formattedDate = formatDateForDisplay(cleanDate);
+  if (!cleanName) {
+    return formattedDate;
+  }
+
+  return `${cleanName} (${formattedDate})`;
+}
+
+function formatDateForDisplay(value) {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
 }
 
 function buildPriorityTopics(context, signal) {
