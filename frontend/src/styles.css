@@ -250,6 +250,34 @@ body {
   flex-wrap: wrap;
 }
 
+.module-tabs {
+  display: inline-flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.82);
+  width: fit-content;
+}
+
+.module-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.module-tab.active {
+  border-color: rgba(2, 132, 199, 0.35);
+  background: rgba(2, 132, 199, 0.12);
+  color: #0c4a6e;
+}
+
 .attempt-badge {
   border-radius: 999px;
   padding: 7px 11px;
@@ -295,6 +323,105 @@ body {
 
 .metric-card strong {
   font-size: 0.92rem;
+}
+
+.risk-input-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.risk-field {
+  display: grid;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.risk-field input,
+.risk-field select {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 10px;
+  font: inherit;
+  background: #fff;
+  color: var(--ink);
+}
+
+.risk-field-full {
+  grid-column: 1 / -1;
+}
+
+.risk-dashboard {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.risk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.risk-pill {
+  border-radius: 999px;
+  padding: 6px 11px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.risk-pill.low {
+  background: rgba(22, 163, 74, 0.12);
+  color: #166534;
+}
+
+.risk-pill.moderate {
+  background: rgba(245, 158, 11, 0.15);
+  color: #92400e;
+}
+
+.risk-pill.high {
+  background: rgba(239, 68, 68, 0.14);
+  color: #991b1b;
+}
+
+.risk-score {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.risk-trend {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.risk-trend.improving {
+  color: #166534;
+}
+
+.risk-trend.declining {
+  color: #991b1b;
+}
+
+.risk-trend.stable {
+  color: #475569;
+}
+
+.risk-outcome {
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.risk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .signal-box,
@@ -607,6 +734,10 @@ body {
   }
 
   .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .risk-input-grid {
     grid-template-columns: 1fr;
   }
 
