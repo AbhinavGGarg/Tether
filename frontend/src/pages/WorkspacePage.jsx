@@ -6,6 +6,12 @@ import { endSession, markInterventionApplied, recordMetrics, startSession } from
 
 const GRADE_OPTIONS = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 const RISK_LEVEL_ORDER = { Low: 1, Moderate: 2, High: 3 };
+const SMART_REMINDER_DELAYS_MS = [0, 3 * 60 * 1000, 8 * 60 * 1000];
+const SMART_MODE_CONFIG = {
+  Normal: { inactivityMs: 50000, lostFocusMs: 75000 },
+  Focus: { inactivityMs: 35000, lostFocusMs: 55000 },
+  Chill: { inactivityMs: 80000, lostFocusMs: 110000 }
+};
 
 function WorkspacePage() {
   const navigate = useNavigate();
@@ -31,6 +37,18 @@ function WorkspacePage() {
   const [priorityTopics, setPriorityTopics] = useState([]);
   const [focusModeRunning, setFocusModeRunning] = useState(false);
   const [focusModeSeconds, setFocusModeSeconds] = useState(60);
+  const [smartNudges, setSmartNudges] = useState({
+    enabled: false,
+    mode: "Normal",
+    phoneNumber: "",
+    smsEnabled: false
+  });
+  const [smartNudgeStatus, setSmartNudgeStatus] = useState("Smart Nudges are off.");
+  const [smartNudgePermission, setSmartNudgePermission] = useState(
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported"
+  );
+  const [reminderLogs, setReminderLogs] = useState([]);
+  const [nudgeEvents, setNudgeEvents] = useState([]);
 
   const [context, setContext] = useState({
     domain: window.location.hostname,
@@ -72,6 +90,8 @@ function WorkspacePage() {
   const lastInteractionRef = useRef(Date.now());
   const previousRiskScoreRef = useRef(null);
   const previousRiskLevelRef = useRef(null);
+  const smartReminderRef = useRef({ active: null });
+  const notificationRequestedRef = useRef(false);
 
   const keyEventsRef = useRef([]);
   const editEventsRef = useRef([]);
@@ -97,14 +117,14 @@ function WorkspacePage() {
   );
 
   const combinedTimeline = useMemo(() => {
-    return [...timeline, ...riskEvents]
+    return [...timeline, ...riskEvents, ...nudgeEvents]
       .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))
       .slice(0, 12);
-  }, [timeline, riskEvents]);
+  }, [timeline, riskEvents, nudgeEvents]);
 
   const enrichedActiveIntervention = useMemo(
-    () => attachRiskToIntervention(activeIntervention, riskState),
-    [activeIntervention, riskState]
+    () => attachRiskToIntervention(activeIntervention, riskState, smartNudges),
+    [activeIntervention, riskState, smartNudges]
   );
 
   const enrichedAssistantIntervention = useMemo(() => {
@@ -125,6 +145,19 @@ function WorkspacePage() {
         ...prev
       ].slice(0, 30)
     );
+  }, []);
+
+  const addSmartNudgeEvent = useCallback((eventType, label, details) => {
+    const entry = {
+      id: `nudge-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      ts: Date.now(),
+      eventType,
+      label,
+      details
+    };
+
+    setReminderLogs((prev) => [entry, ...prev].slice(0, 40));
+    setNudgeEvents((prev) => [entry, ...prev].slice(0, 40));
   }, []);
 
   async function handleCreateSession() {
@@ -180,6 +213,10 @@ function WorkspacePage() {
       setFocusModeRunning(false);
       setFocusModeSeconds(60);
       setPortalStatus("");
+      setSmartNudgeStatus("Smart Nudges are off.");
+      setReminderLogs([]);
+      setNudgeEvents([]);
+      smartReminderRef.current = { active: null };
       setActiveTab("live");
     } catch {
       setStartError("Could not start session. Try again.");
@@ -398,6 +435,169 @@ function WorkspacePage() {
     return () => window.clearInterval(timer);
   }, [addRiskTimelineEvent, focusModeRunning]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setSmartNudgePermission("unsupported");
+      return;
+    }
+
+    setSmartNudgePermission(Notification.permission);
+    if (!smartNudges.enabled) {
+      return;
+    }
+
+    if (!notificationRequestedRef.current && Notification.permission === "default") {
+      notificationRequestedRef.current = true;
+      Notification.requestPermission().then((permission) => {
+        setSmartNudgePermission(permission);
+        addSmartNudgeEvent(
+          "notification_permission",
+          `Notification permission: ${permission}`,
+          "Permission requested for Smart Nudges."
+        );
+      });
+    }
+  }, [addSmartNudgeEvent, smartNudges.enabled]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+
+    const reminderTimer = window.setInterval(() => {
+      const now = Date.now();
+      const activeReminder = smartReminderRef.current.active;
+
+      if (!smartNudges.enabled || !connected) {
+        if (activeReminder) {
+          smartReminderRef.current.active = null;
+          setSmartNudgeStatus("Smart Nudges stopped.");
+        }
+        return;
+      }
+
+      const modeConfig = SMART_MODE_CONFIG[smartNudges.mode] || SMART_MODE_CONFIG.Normal;
+      const inactiveMs = now - lastInteractionRef.current;
+      const lowProductivityMs = now - lastInputRef.current;
+      const hasSessionProgress = telemetry.timeOnTaskMs > 12000;
+      const forgotSessionDetected = hasSessionProgress && inactiveMs >= modeConfig.inactivityMs;
+      const lostFocusDetected =
+        hasSessionProgress &&
+        inactiveMs < modeConfig.inactivityMs &&
+        lowProductivityMs > modeConfig.lostFocusMs &&
+        (signal.lowFocusScore > 0.44 || signal.inefficiencyScore > 0.44);
+
+      const userReturned = inactiveMs < 6000 && lowProductivityMs < 10000;
+      const productivityRecovered =
+        telemetry.typingSpeed > 0.28 && signal.lowFocusScore < 0.4 && signal.inefficiencyScore < 0.4;
+
+      if (!smartReminderRef.current.active) {
+        if (forgotSessionDetected || lostFocusDetected) {
+          const type = forgotSessionDetected ? "forgot_session" : "lost_focus";
+          smartReminderRef.current.active = {
+            type,
+            startedAt: now,
+            sentCount: 0
+          };
+
+          setSmartNudgeStatus(
+            type === "forgot_session"
+              ? "Detected possible forgotten session. Smart nudges engaged."
+              : "Detected low productivity. Smart nudges engaged."
+          );
+
+          addSmartNudgeEvent(
+            "focus_drift_detected",
+            type === "forgot_session" ? "Forgot session detected" : "Lost focus detected",
+            "Preparing reminder sequence."
+          );
+        }
+        return;
+      }
+
+      const active = smartReminderRef.current.active;
+
+      if (userReturned || (active.type === "lost_focus" && productivityRecovered)) {
+        addSmartNudgeEvent("user_returned", "User returned", "Reminder sequence stopped.");
+        smartReminderRef.current.active = null;
+        setSmartNudgeStatus("User returned. Smart reminders paused.");
+        return;
+      }
+
+      if (active.sentCount >= SMART_REMINDER_DELAYS_MS.length) {
+        setSmartNudgeStatus("Reminder limit reached (3). Waiting for user return.");
+        return;
+      }
+
+      const dueDelay = SMART_REMINDER_DELAYS_MS[active.sentCount];
+      if (now - active.startedAt < dueDelay) {
+        return;
+      }
+
+      if (active.sentCount > 0) {
+        addSmartNudgeEvent("user_ignored", "User ignored", "No return after previous reminder.");
+      }
+
+      const message =
+        active.type === "forgot_session"
+          ? "Reminder sent: Resume session"
+          : "Reminder sent: Regain focus and continue the current task";
+      addSmartNudgeEvent("reminder_sent", message, `Mode: ${smartNudges.mode}`);
+
+      if (smartNudgePermission === "granted" && typeof Notification !== "undefined") {
+        const notification = new Notification("Nudge Smart Reminder", {
+          body:
+            active.type === "forgot_session"
+              ? "You paused your session. Resume now?"
+              : "You are active but drifting. Want to refocus now?",
+          tag: `nudge-${active.type}`
+        });
+
+        notification.onclick = () => {
+          window.focus();
+          addSmartNudgeEvent("user_returned", "User returned", "Clicked browser notification.");
+          smartReminderRef.current.active = null;
+          setSmartNudgeStatus("Notification opened. User returned.");
+          notification.close();
+        };
+      }
+
+      if (smartNudges.smsEnabled && isPhoneNumberValid(smartNudges.phoneNumber)) {
+        const formatted = formatPhoneForDisplay(smartNudges.phoneNumber);
+        addSmartNudgeEvent(
+          "sms_sent",
+          `📱 Text sent to ${formatted}: "You paused your session. Resume now?"`,
+          "SMS simulation"
+        );
+      }
+
+      smartReminderRef.current.active = {
+        ...active,
+        sentCount: active.sentCount + 1
+      };
+
+      const remaining = SMART_REMINDER_DELAYS_MS.length - (active.sentCount + 1);
+      setSmartNudgeStatus(
+        remaining > 0 ? `Reminder sent. ${remaining} reminder(s) remaining in sequence.` : "All reminders sent."
+      );
+    }, 1000);
+
+    return () => window.clearInterval(reminderTimer);
+  }, [
+    addSmartNudgeEvent,
+    connected,
+    sessionId,
+    signal.inefficiencyScore,
+    signal.lowFocusScore,
+    smartNudgePermission,
+    smartNudges.enabled,
+    smartNudges.mode,
+    smartNudges.phoneNumber,
+    smartNudges.smsEnabled,
+    telemetry.timeOnTaskMs,
+    telemetry.typingSpeed
+  ]);
+
   function handleInterventionAction(intervention, action) {
     if (!intervention || !sessionId) {
       return "";
@@ -501,9 +701,49 @@ function WorkspacePage() {
     }
   }
 
+  function handleSmartNudgesToggle(enabled) {
+    setSmartNudges((prev) => ({ ...prev, enabled }));
+
+    if (!enabled) {
+      smartReminderRef.current.active = null;
+      setSmartNudgeStatus("Smart Nudges are off.");
+      addSmartNudgeEvent("nudge_disabled", "Smart Nudges disabled", "Reminder engine stopped.");
+      return;
+    }
+
+    setSmartNudgeStatus(`Smart Nudges enabled in ${smartNudges.mode} mode.`);
+    addSmartNudgeEvent("nudge_enabled", "Smart Nudges enabled", `Mode: ${smartNudges.mode}`);
+  }
+
+  function handleSmartNudgeMode(mode) {
+    setSmartNudges((prev) => ({ ...prev, mode }));
+    addSmartNudgeEvent("nudge_mode_changed", `Notification mode set to ${mode}`, "Updated Smart Nudges behavior.");
+    setSmartNudgeStatus(`Smart Nudges running in ${mode} mode.`);
+  }
+
+  function handleEnableSmsReminders() {
+    if (!isPhoneNumberValid(smartNudges.phoneNumber)) {
+      setSmartNudgeStatus("Enter a valid phone number to enable SMS reminders.");
+      return;
+    }
+
+    setSmartNudges((prev) => ({ ...prev, smsEnabled: true }));
+    addSmartNudgeEvent(
+      "sms_enabled",
+      `SMS reminders enabled for ${formatPhoneForDisplay(smartNudges.phoneNumber)}`,
+      "SMS simulation active."
+    );
+    setSmartNudgeStatus("SMS reminders enabled.");
+  }
+
   async function goToDashboard() {
     if (!sessionId) {
       return;
+    }
+
+    smartReminderRef.current.active = null;
+    if (smartNudges.enabled) {
+      addSmartNudgeEvent("session_completed", "Session completed", "Stopped all smart reminder sequences.");
     }
 
     await endSession(sessionId);
@@ -592,6 +832,13 @@ function WorkspacePage() {
               type="button"
             >
               Grades & Risk
+            </button>
+            <button
+              className={`module-tab ${activeTab === "smart_nudges" ? "active" : ""}`}
+              onClick={() => setActiveTab("smart_nudges")}
+              type="button"
+            >
+              Smart Nudges
             </button>
           </section>
 
@@ -797,6 +1044,104 @@ function WorkspacePage() {
               </aside>
             </section>
           ) : null}
+
+          {activeTab === "smart_nudges" ? (
+            <section className="workspace-grid">
+              <article className="panel panel-main">
+                <h3>Smart Nudges – Persistent Focus Recovery</h3>
+
+                <div className="smart-settings-card">
+                  <label className="smart-toggle">
+                    <span>Enable Smart Nudges</span>
+                    <input
+                      type="checkbox"
+                      checked={smartNudges.enabled}
+                      onChange={(event) => handleSmartNudgesToggle(event.target.checked)}
+                    />
+                  </label>
+
+                  <label className="risk-field">
+                    Notification mode
+                    <select
+                      value={smartNudges.mode}
+                      onChange={(event) => handleSmartNudgeMode(event.target.value)}
+                      disabled={!smartNudges.enabled}
+                    >
+                      <option value="Normal">Normal</option>
+                      <option value="Focus">Focus</option>
+                      <option value="Chill">Chill</option>
+                    </select>
+                  </label>
+
+                  <p className="monitor-note">
+                    Browser permission: <strong>{smartNudgePermission}</strong>
+                  </p>
+                  <p className="monitor-note">{smartNudgeStatus}</p>
+                </div>
+
+                <div className="smart-settings-card">
+                  <h4>SMS Reminder Simulation</h4>
+                  <label className="risk-field">
+                    Phone number
+                    <input
+                      type="text"
+                      value={smartNudges.phoneNumber}
+                      onChange={(event) =>
+                        setSmartNudges((prev) => ({ ...prev, phoneNumber: event.target.value }))
+                      }
+                      placeholder="(555) 123-4567"
+                    />
+                  </label>
+
+                  <div className="action-row">
+                    <button
+                      className="btn btn-ghost"
+                      onClick={handleEnableSmsReminders}
+                      type="button"
+                      disabled={!smartNudges.enabled}
+                    >
+                      Enable SMS Reminders
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setSmartNudges((prev) => ({ ...prev, smsEnabled: false }));
+                        addSmartNudgeEvent("sms_disabled", "SMS reminders disabled", "SMS simulation inactive.");
+                      }}
+                      type="button"
+                    >
+                      Disable SMS
+                    </button>
+                  </div>
+
+                  <p className="monitor-note">
+                    SMS status: <strong>{smartNudges.smsEnabled ? "Enabled" : "Disabled"}</strong>
+                  </p>
+                </div>
+              </article>
+
+              <aside className="panel panel-side">
+                <h3>Reminder Log</h3>
+                <div className="timeline-box">
+                  {reminderLogs.length === 0 ? <p>No reminders yet.</p> : null}
+                  {reminderLogs.map((item) => (
+                    <div key={item.id} className="timeline-item">
+                      <span>{new Date(item.ts).toLocaleTimeString()}</span>
+                      <p>{item.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="timeline-box">
+                  <h4>Reminder Rules</h4>
+                  <p>1st notification after inactivity detection.</p>
+                  <p>2nd reminder after 3 minutes.</p>
+                  <p>3rd reminder after 8 minutes. Then stop.</p>
+                  <p>Reminders stop if user returns, session ends, or Smart Nudges is off.</p>
+                </div>
+              </aside>
+            </section>
+          ) : null}
         </>
       ) : null}
 
@@ -907,7 +1252,7 @@ function computeGradesRiskState({ currentGrade, upcomingAssessment, signal, tele
   };
 }
 
-function attachRiskToIntervention(intervention, riskState) {
+function attachRiskToIntervention(intervention, riskState, smartNudges = null) {
   if (!intervention) {
     return null;
   }
@@ -915,10 +1260,15 @@ function attachRiskToIntervention(intervention, riskState) {
   const whatBase = intervention.what || intervention.message || "";
   const whyBase = intervention.why || intervention.reason || "";
   const riskLine = `You are currently at ${riskState.level.toLowerCase()} risk based on your grade and session behavior.`;
+  const nudgeLine =
+    smartNudges?.enabled
+      ? `Smart Nudges is active (${smartNudges.mode}) and can re-engage you if you step away.`
+      : "";
 
   return {
     ...intervention,
     what: whatBase.includes("currently at") ? whatBase : `${whatBase} ${riskLine}`.trim(),
+    message: `${whatBase} ${riskLine} ${nudgeLine}`.trim(),
     why: whyBase.includes("grade") ? whyBase : `${whyBase} Current grade signal: ${riskState.gradeLabel}.`.trim()
   };
 }
@@ -998,6 +1348,20 @@ function parseGradeFromPortalLink(link) {
 
   const normalized = match[1].toUpperCase();
   return GRADE_OPTIONS.includes(normalized) ? normalized : null;
+}
+
+function isPhoneNumberValid(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length >= 10;
+}
+
+function formatPhoneForDisplay(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length < 10) {
+    return value;
+  }
+  const core = digits.slice(-10);
+  return `(${core.slice(0, 3)}) ${core.slice(3, 6)}-${core.slice(6)}`;
 }
 
 function extractPageTextSample() {
