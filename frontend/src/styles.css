@@ -101,6 +101,90 @@ body {
   font-size: 0.9rem;
 }
 
+.landing-hero {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 14px;
+}
+
+.landing-hero-copy h2 {
+  margin: 0 0 8px;
+  font-size: clamp(1.2rem, 2.2vw, 1.8rem);
+}
+
+.landing-hero-copy p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.landing-kpis {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.landing-kpis span {
+  background: rgba(2, 132, 199, 0.12);
+  border: 1px solid rgba(2, 132, 199, 0.28);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  color: #0c4a6e;
+}
+
+.landing-hero-cta {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.landing-hero-cta h3 {
+  margin: 0 0 6px;
+}
+
+.landing-hero-cta p {
+  margin: 0 0 10px;
+  color: var(--muted);
+}
+
+.landing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.landing-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: #1e293b;
+}
+
+.landing-list li {
+  line-height: 1.4;
+}
+
+.landing-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.landing-steps div {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+  padding: 10px;
+}
+
+.landing-steps p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
 .status-pill {
   padding: 7px 12px;
   border-radius: 999px;
@@ -593,7 +677,9 @@ body {
 
 @media (max-width: 1060px) {
   .workspace-grid,
-  .dashboard-grid {
+  .dashboard-grid,
+  .landing-grid,
+  .landing-hero {
     grid-template-columns: 1fr;
   }
 

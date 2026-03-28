@@ -1,51 +1,77 @@
 # Nudge
 
-Real-time AI learning intervention system that observes student behavior in a coding workspace, detects confusion/knowledge gaps/inefficiency, and intervenes live with context-aware guidance.
+Real-time AI learning intervention system that observes behavior, detects risk patterns, and intervenes live with context-aware guidance.
 
-## Why this is different
+## The Problem
 
-Nudge is not a passive tutor chatbot. It actively monitors decision-making signals and triggers targeted interventions during the learning process.
+Procrastination is a huge unsolved problem that affects many high school and college students today. Most learning tools are passive and only react after performance drops.
 
-## Inspiration synthesis
+Nudge is built to intervene in the moment.
 
-This MVP combines patterns inspired by:
+## What Nudge Does
 
-- **Minerva**: guided micro-lessons and actionable learning path generation.
-- **Prereq**: concept dependency graph + prerequisite gap inference.
-- **Percepta**: event-loop style real-time behavior sensing and instant contextual feedback.
+Nudge monitors live work behavior across coding, studying, writing, and browsing contexts, then detects:
 
-## Core features
+- distraction / inactivity
+- low focus
+- procrastination patterns
+- inefficiency loops
 
-- Real-time coding workspace telemetry:
+When risk is detected, it triggers actionable interventions in real time.
+
+## Why This Is Different
+
+Nudge is not a passive tutor chatbot.
+
+It is a behavior-first intervention system that:
+
+- senses what is happening now
+- explains why risk is increasing
+- proposes the best next action
+- tracks whether the action improved outcomes
+
+## Core Features
+
+- Context-aware behavior tracking:
   - typing speed
   - pause duration
-  - repeated edits
-  - deletion churn
-  - time on problem
-- Detection engine for:
-  - confusion
-  - knowledge gaps tied to prerequisites
-  - inefficiency
-- OpenAI-powered intervention reasoning (with robust fallback if no API key).
-- Live intervention popups with:
-  - next best action
-  - mini lesson
-  - short example
-  - quick practice
-- Session dashboard with:
-  - time wasted
-  - struggled concepts
-  - prerequisite gaps
-  - intervention effectiveness
-  - improvement suggestions
+  - idle duration
+  - repeated actions / edit churn
+  - tab switches
+  - scroll behavior
+  - time on task
+- Strict inactivity detection:
+  - 90s no activity trigger
+  - "Distraction / Inactivity" intervention
+  - 3-minute follow-up reminder when ignored
+- Live intervention actions:
+  - Lock In (2 min focus)
+  - Resume Task
+  - Ignore
+  - Break into Steps
+  - Try New Approach
+- Grades & Risk module:
+  - baseline grade + 6 course-grade slots
+  - risk scoring and trend
+  - outcome prediction
+  - recovery actions
+- Smart Nudges module:
+  - notification mode control
+  - reminder log
+  - SMS reminder simulation
+- Session dashboard:
+  - intervention history
+  - timeline
+  - focus/risk improvement metrics
 
-## Tech stack
+## Tech Stack
 
-- Frontend: React + Vite + Socket.IO client + Recharts + Framer Motion
-- Backend: Node.js + Express + Socket.IO + OpenAI SDK
-- Runtime: in-memory session store (hackathon-optimized)
+- Frontend: React + Vite + Recharts
+- Backend: Node.js + Express + OpenAI SDK
+- Extension: Chrome Extension (Manifest V3)
+- Runtime storage: in-memory/local storage (hackathon optimized)
 
-## Project structure
+## Project Structure
 
 ```text
 Nudge/
@@ -61,24 +87,31 @@ Nudge/
       pages/
         WorkspacePage.jsx
         DashboardPage.jsx
-      components/
-        InterventionPopup.jsx
-        FloatingAssistant.jsx
       lib/api.js
       styles.css
+    vercel.json
+  extension/
+    manifest.json
+    icons/
+      nudge-128.png
+    src/
+      background.js
+      content.js
+      popup.html
+      popup.js
   .env.example
   package.json
 ```
 
-## Quick start
+## Quick Start
 
-1. Install dependencies:
+1. Install dependencies
 
 ```bash
 npm install
 ```
 
-2. Configure environment:
+2. Configure environment
 
 ```bash
 cp .env.example .env
@@ -86,11 +119,13 @@ cp .env.example .env
 
 Set at least:
 
-- `OPENAI_API_KEY` (optional but recommended for live AI reasoning)
+- `OPENAI_API_KEY` (optional, recommended)
 - `OPENAI_MODEL` (default `gpt-4.1-mini`)
+- `PORT` (default `8787`)
+- `CLIENT_ORIGIN` (default `http://localhost:5173`)
 - `VITE_API_BASE` (default `http://localhost:8787`)
 
-3. Run frontend + backend:
+3. Run frontend + backend
 
 ```bash
 npm run dev
@@ -99,58 +134,44 @@ npm run dev
 - Frontend: [http://localhost:5173](http://localhost:5173)
 - Backend: [http://localhost:8787](http://localhost:8787)
 
-## Demo flow
+## Demo Flow
 
-1. Open workspace and start solving **Sum Even Numbers**.
-2. Simulate being stuck:
-   - pause for 10+ seconds,
-   - make repeated deletions,
-   - submit an incorrect attempt.
-3. Observe live intervention popup.
-4. Click **Apply Support Path** to inject targeted guidance.
-5. Continue and submit improved attempt.
-6. Click **End Session + Dashboard**.
-7. Present outcome metrics and prerequisite gaps.
+1. Start a session from the homepage.
+2. Work normally for 20–30 seconds.
+3. Stop all activity for ~90 seconds.
+4. Observe "Distraction / Inactivity" intervention + notification.
+5. Click **Lock In (2 min focus)**.
+6. Watch risk/focus improve in timeline and dashboard.
 
-## API snapshot
+## Backend API Snapshot
 
 - `GET /api/health`
-- `GET /api/problems`
+- `GET /api/context/profiles`
 - `POST /api/session/start`
-- `POST /api/session/attempt`
+- `POST /api/session/:sessionId/metrics`
+- `POST /api/session/:sessionId/intervention-action`
 - `POST /api/session/:sessionId/end`
 - `GET /api/session/:sessionId/summary`
 
-Socket events:
+## Chrome Extension MVP
 
-- Client -> Server
-  - `session:join`
-  - `session:metrics`
-  - `session:intervention-result`
-- Server -> Client
-  - `session:joined`
-  - `session:signal`
-  - `intervention`
+The extension in `extension/` can:
 
-## Hackathon notes
+- monitor behavior directly on websites,
+- run live detection in a background worker,
+- show interventions in an on-page floating widget,
+- show metrics/timeline in popup view.
 
-- This is optimized for demo impact and responsiveness.
-- Detection thresholds are interpretable and easy to tune.
-- Current storage is in-memory; production version can swap to Postgres/Redis.
+### Load Extension Locally
 
-## Chrome extension MVP
+1. Open `chrome://extensions`
+2. Turn on **Developer mode**
+3. Click **Load unpacked**
+4. Select the `extension` folder
+5. Reload any target tab
 
-Nudge now includes a Chrome extension scaffold in `extension/` that:
+## Notification + SMS Notes
 
-- tracks typing/pauses/edit churn on pages you use,
-- runs live issue detection in a background worker,
-- shows interventions in an on-page floating widget,
-- shows live metrics and intervention timeline in the extension popup.
-
-### Load extension locally
-
-1. Open Chrome and go to `chrome://extensions`.
-2. Turn on **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the `extension` folder from this repo.
-5. Open any coding/study page and click the Nudge extension icon to see live status.
+- Browser notifications are real when permission is granted.
+- SMS is currently a simulation log (for hackathon demo flow).
+- Production SMS can be added with Twilio in a backend worker.

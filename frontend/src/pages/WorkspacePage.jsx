@@ -839,22 +839,72 @@ function handleInterventionAction(intervention, action) {
       </header>
 
       {!sessionId ? (
-        <section className="panel">
-          <h3>Create Operator Session</h3>
-          <p>Start a session to run live detection, interventions, and impact tracking.</p>
-          <div className="action-row">
-            <input
-              value={learnerDraft}
-              onChange={(event) => setLearnerDraft(event.target.value)}
-              placeholder="Operator name"
-              className="session-input"
-            />
-            <button className="btn btn-primary" onClick={handleCreateSession} disabled={startingSession}>
-              {startingSession ? "Starting..." : "Start Session"}
-            </button>
-          </div>
-          {startError ? <p className="start-error">{startError}</p> : null}
-        </section>
+        <>
+          <section className="panel landing-hero">
+            <div className="landing-hero-copy">
+              <h2>Real-time intervention for procrastination, distraction, and low focus</h2>
+              <p>
+                Nudge observes live behavior patterns and intervenes when momentum drops. It helps students and builders
+                recover focus in the moment instead of after performance already declines.
+              </p>
+              <div className="landing-kpis">
+                <span>Live context detection</span>
+                <span>Behavior risk scoring</span>
+                <span>Immediate recovery actions</span>
+                <span>Post-session impact analytics</span>
+              </div>
+            </div>
+            <div className="landing-hero-cta">
+              <h3>Create Operator Session</h3>
+              <p>Start a session to run live detection, interventions, and impact tracking.</p>
+              <div className="action-row">
+                <input
+                  value={learnerDraft}
+                  onChange={(event) => setLearnerDraft(event.target.value)}
+                  placeholder="Operator name"
+                  className="session-input"
+                />
+                <button className="btn btn-primary" onClick={handleCreateSession} disabled={startingSession}>
+                  {startingSession ? "Starting..." : "Start Session"}
+                </button>
+              </div>
+              {startError ? <p className="start-error">{startError}</p> : null}
+            </div>
+          </section>
+
+          <section className="landing-grid">
+            <article className="panel">
+              <h3>What Nudge Solves</h3>
+              <p>
+                Procrastination and attention drift are still major unsolved problems in learning. Most tools only react
+                after results drop. Nudge acts during the session.
+              </p>
+              <ul className="landing-list">
+                <li>Detects inactivity, distraction, low focus, and inefficiency in real time.</li>
+                <li>Adapts to page context across coding, reading, writing, and browsing.</li>
+                <li>Pushes targeted actions like lock-in timers and recovery prompts.</li>
+              </ul>
+            </article>
+
+            <article className="panel">
+              <h3>How It Works</h3>
+              <div className="landing-steps">
+                <div>
+                  <strong>1. Observe</strong>
+                  <p>Capture typing speed, idle time, repeated actions, tab switching, and scroll behavior.</p>
+                </div>
+                <div>
+                  <strong>2. Detect</strong>
+                  <p>Classify risk patterns and trigger strict inactivity detection at 90 seconds.</p>
+                </div>
+                <div>
+                  <strong>3. Intervene</strong>
+                  <p>Deliver live actions and log measurable improvement in timeline and dashboard.</p>
+                </div>
+              </div>
+            </article>
+          </section>
+        </>
       ) : null}
 
       {sessionId ? (
