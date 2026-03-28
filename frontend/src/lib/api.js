@@ -114,7 +114,7 @@ function recordMetrics(sessionId, rawMetrics) {
     addTimeline(session, "issue_detected", `${humanizeIssue(issue.type)} detected`, issue.reason);
 
     if (canEmitIntervention(session, issue)) {
-      intervention = buildIntervention(issue, context, detection.diagnostics);
+      intervention = sanitizeIntervention(buildIntervention(issue, context, detection.diagnostics));
       session.interventions.unshift(intervention);
       session.interventions = session.interventions.slice(0, 20);
       session.pendingIgnoredReminder = null;
@@ -147,7 +147,7 @@ function recordMetrics(sessionId, rawMetrics) {
 
   return {
     signal,
-    intervention,
+    intervention: sanitizeIntervention(intervention),
     context,
     timeline: session.timeline.slice(0, 10)
   };
@@ -1066,6 +1066,99 @@ function dispatchBrowserNotification(title, body) {
   new Notification(title, { body });
 }
 
+function sanitizeSessionState(session) {
+  if (!session || typeof session !== "object") {
+    return session;
+  }
+
+  const interventions = Array.isArray(session.interventions)
+    ? session.interventions.map((entry) => sanitizeIntervention(entry)).filter(Boolean)
+    : [];
+
+  return {
+    ...session,
+    interventions
+  };
+}
+
+function sanitizeIntervention(rawIntervention) {
+  if (!rawIntervention || typeof rawIntervention !== "object") {
+    return null;
+  }
+
+  const normalizedActions = normalizeInterventionActions(rawIntervention.actions);
+  const textBlob = [
+    rawIntervention.title,
+    rawIntervention.message,
+    rawIntervention.what,
+    rawIntervention.why,
+    rawIntervention.nextAction
+  ]
+    .map((value) => String(value || ""))
+    .join(" ")
+    .toLowerCase();
+
+  const isLegacy =
+    textBlob.includes("stuck moment detected") ||
+    textBlob.includes("stuck on variables") ||
+    textBlob.includes("pseudocode") ||
+    textBlob.includes("60-second reset") ||
+    normalizedActions.some((action) => ["show_suggestion", "try_action", "mark_applied"].includes(action));
+
+  const actionPayloads = rawIntervention.actionPayloads && typeof rawIntervention.actionPayloads === "object"
+    ? rawIntervention.actionPayloads
+    : {};
+
+  if (isLegacy) {
+    return {
+      ...rawIntervention,
+      title: "Distraction / Inactivity",
+      message: "You’ve been inactive for over a minute. You may be losing focus.",
+      what: "You’ve been inactive for over a minute. You may be losing focus.",
+      why: "Legacy intervention templates were replaced with behavior-based guidance.",
+      nextAction: "Lock back in for 2 minutes to regain momentum.",
+      actions: ["lock_in_2m", "resume_task", "ignore"],
+      actionPayloads: {
+        lock_in_2m: "Start a 2-minute focus sprint and avoid switching tasks.",
+        resume_task: "Resume now and complete one concrete step.",
+        ignore: "No action taken. You can continue monitoring."
+      }
+    };
+  }
+
+  return {
+    ...rawIntervention,
+    actions: normalizedActions,
+    actionPayloads
+  };
+}
+
+function normalizeInterventionActions(actions) {
+  const source = Array.isArray(actions) && actions.length
+    ? actions
+    : ["refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task"];
+
+  const mapping = {
+    show_suggestion: "break_steps",
+    try_action: "resume_task",
+    mark_applied: "resume_task",
+    show_fix: "break_steps",
+    give_hint: "try_new_approach",
+    refocus: "refocus_timer",
+    summarize: "resume_task"
+  };
+
+  const normalized = source
+    .map((action) => mapping[action] || action)
+    .filter((action) =>
+      ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task", "ignore"].includes(
+        action
+      )
+    );
+
+  return normalized.length ? Array.from(new Set(normalized)) : ["resume_task"];
+}
+
 function createSessionId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -1079,7 +1172,15 @@ function readSession(sessionId) {
   }
 
   const raw = localStorage.getItem(`${LOCAL_SESSION_PREFIX}${sessionId}`);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return sanitizeSessionState(JSON.parse(raw));
+  } catch {
+    return null;
+  }
 }
 
 function writeSession(session) {

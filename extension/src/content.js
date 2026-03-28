@@ -92,7 +92,7 @@ function boot() {
         return;
       }
 
-      lastIntervention = message.intervention || null;
+      lastIntervention = sanitizeIntervention(message.intervention || null);
       currentSignal = message.signal || currentSignal;
       currentContext = message.context || currentContext;
       recentTimeline = normalizeTimeline(message.timeline, recentTimeline);
@@ -265,7 +265,7 @@ function publishMetrics() {
       actionDetail = "";
       impactMessage = "";
     } else if (!focusTimer.running && response.intervention) {
-      lastIntervention = response.intervention;
+      lastIntervention = sanitizeIntervention(response.intervention);
       actionDetail = "";
       impactMessage = "";
     }
@@ -316,7 +316,7 @@ function handleInterventionAction(action) {
         recentTimeline = normalizeTimeline(response.timeline, recentTimeline);
       }
       if (response.intervention) {
-        lastIntervention = response.intervention;
+        lastIntervention = sanitizeIntervention(response.intervention);
       }
       if (typeof response.liveResultsUrl === "string" && response.liveResultsUrl.trim()) {
         resultsUrl = response.liveResultsUrl;
@@ -780,6 +780,84 @@ function shouldSkipMonitoringPage(locationLike) {
   const path = String(locationLike?.pathname || "");
 
   return BLOCKED_MONITOR_PAGES.some((rule) => host === rule.host && path.startsWith(rule.pathPrefix));
+}
+
+function sanitizeIntervention(rawIntervention) {
+  if (!rawIntervention || typeof rawIntervention !== "object") {
+    return null;
+  }
+
+  const normalizedActions = normalizeInterventionActions(rawIntervention.actions);
+  const textBlob = [
+    rawIntervention.title,
+    rawIntervention.message,
+    rawIntervention.what,
+    rawIntervention.why,
+    rawIntervention.nextAction
+  ]
+    .map((value) => String(value || ""))
+    .join(" ")
+    .toLowerCase();
+
+  const isLegacy =
+    textBlob.includes("stuck moment detected") ||
+    textBlob.includes("stuck on variables") ||
+    textBlob.includes("pseudocode") ||
+    textBlob.includes("60-second reset") ||
+    normalizedActions.some((action) => ["show_suggestion", "try_action", "mark_applied"].includes(action));
+
+  const actionPayloads = rawIntervention.actionPayloads && typeof rawIntervention.actionPayloads === "object"
+    ? rawIntervention.actionPayloads
+    : {};
+
+  if (isLegacy) {
+    return {
+      ...rawIntervention,
+      title: "Distraction / Inactivity",
+      message: "You’ve been inactive for over a minute. You may be losing focus.",
+      what: "You’ve been inactive for over a minute. You may be losing focus.",
+      why: "Legacy intervention templates were replaced with behavior-based guidance.",
+      nextAction: "Lock back in for 2 minutes to regain momentum.",
+      actions: ["lock_in_2m", "resume_task", "ignore"],
+      actionPayloads: {
+        lock_in_2m: "Start a 2-minute focus sprint and avoid switching tasks.",
+        resume_task: "Resume now and complete one concrete step.",
+        ignore: "No action taken. You can continue monitoring."
+      }
+    };
+  }
+
+  return {
+    ...rawIntervention,
+    actions: normalizedActions,
+    actionPayloads
+  };
+}
+
+function normalizeInterventionActions(actions) {
+  const source = Array.isArray(actions) && actions.length
+    ? actions
+    : ["refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task"];
+
+  const mapping = {
+    show_suggestion: "break_steps",
+    try_action: "resume_task",
+    mark_applied: "resume_task",
+    show_fix: "break_steps",
+    give_hint: "try_new_approach",
+    refocus: "refocus_timer",
+    summarize: "resume_task"
+  };
+
+  const normalized = source
+    .map((action) => mapping[action] || action)
+    .filter((action) =>
+      ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task", "ignore"].includes(
+        action
+      )
+    );
+
+  return normalized.length ? Array.from(new Set(normalized)) : ["resume_task"];
 }
 
 function normalizeTimeline(value, fallback) {
