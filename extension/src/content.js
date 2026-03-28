@@ -48,6 +48,7 @@ let activityListenersAttached = false;
 let inactivityIntervalId = null;
 let metricsIntervalId = null;
 let uiPresenceIntervalId = null;
+let lastAlertedIssueId = null;
 let interruptionEvents = [];
 let interruptionStats = {
   lostFocusCount: 0,
@@ -101,6 +102,7 @@ function applyTetherPower(enabled) {
     lockInRemainingSec = 0;
     issueActive = false;
     currentIssue = null;
+    lastAlertedIssueId = null;
     lastActionNote = "Tether is off.";
     hidePopup();
     removeDockAndPopup();
@@ -191,6 +193,69 @@ function removeDockAndPopup() {
   overlayCard = null;
   overlayBody = null;
   dockOpen = false;
+  lastAlertedIssueId = null;
+}
+
+function ensureAlertAnimationStyle() {
+  if (document.getElementById("tether-alert-style")) {
+    return;
+  }
+  const style = document.createElement("style");
+  style.id = "tether-alert-style";
+  style.textContent = `
+    @keyframes tether-alert-pulse {
+      0% { box-shadow: 0 24px 52px rgba(127,29,29,0.35); }
+      50% { box-shadow: 0 24px 52px rgba(248,113,113,0.52); }
+      100% { box-shadow: 0 24px 52px rgba(127,29,29,0.35); }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function playSoftAlert(issueId) {
+  if (!issueId || lastAlertedIssueId === issueId) {
+    return;
+  }
+  lastAlertedIssueId = issueId;
+
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) {
+      return;
+    }
+
+    const ctx = new AudioCtx();
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.03, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    gain.connect(ctx.destination);
+
+    const tone1 = ctx.createOscillator();
+    tone1.type = "triangle";
+    tone1.frequency.setValueAtTime(660, now);
+    tone1.connect(gain);
+    tone1.start(now);
+    tone1.stop(now + 0.11);
+
+    const tone2 = ctx.createOscillator();
+    tone2.type = "triangle";
+    tone2.frequency.setValueAtTime(550, now + 0.12);
+    tone2.connect(gain);
+    tone2.start(now + 0.12);
+    tone2.stop(now + 0.22);
+
+    window.setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 350);
+  } catch {
+    // Soft alert is best-effort only.
+  }
 }
 
 function onMouseMove(event) {
@@ -341,6 +406,7 @@ function triggerInactivityIssue(idleMs) {
       : "Get back in for 2 minutes to regain focus.",
     idleMs
   };
+  playSoftAlert(currentIssue.id);
   lastActionNote = "";
   renderPopup();
   renderDock();
@@ -380,6 +446,7 @@ function triggerInactivityIssue(idleMs) {
 function clearInactivityIssue() {
   issueActive = false;
   currentIssue = null;
+  lastAlertedIssueId = null;
   hidePopup();
   renderDock();
 }
@@ -574,12 +641,13 @@ function createCenteredPopup() {
     "style",
     [
       "width:min(560px, calc(100vw - 40px))",
-      "background:#0b1220",
-      "border:1px solid rgba(248,113,113,0.45)",
+      "background:linear-gradient(165deg, rgba(69,10,10,0.98), rgba(30,41,59,0.98))",
+      "border:1px solid rgba(248,113,113,0.68)",
       "border-radius:16px",
-      "box-shadow:0 24px 52px rgba(2,6,23,0.5)",
+      "box-shadow:0 24px 52px rgba(127,29,29,0.45)",
       "font-family:Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-      "color:#e2e8f0"
+      "color:#fee2e2",
+      "animation:tether-alert-pulse 1.2s ease-in-out infinite"
     ].join(";")
   );
 
@@ -589,6 +657,7 @@ function createCenteredPopup() {
   overlayCard.appendChild(overlayBody);
   overlay.appendChild(overlayCard);
   document.documentElement.appendChild(overlay);
+  ensureAlertAnimationStyle();
 }
 
 function renderPopup() {
@@ -606,7 +675,10 @@ function renderPopup() {
 
   overlayBody.innerHTML = `
     <div style="display:grid;gap:10px">
-      <div style="font-size:22px;font-weight:800;color:#f87171">${escapeHtml(currentIssue.title)}</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;background:rgba(239,68,68,0.22);color:#fecaca;font-weight:900;font-size:18px">⚠</span>
+        <div style="font-size:22px;font-weight:800;color:#fca5a5">${escapeHtml(currentIssue.title)}</div>
+      </div>
       <div style="font-size:17px;font-weight:700">${escapeHtml(currentIssue.message)}</div>
       <div style="font-size:15px;color:#cbd5e1">${escapeHtml(currentIssue.nextAction)}</div>
       <div style="font-size:12px;color:#94a3b8">Idle: ${idleSeconds}s</div>
