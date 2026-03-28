@@ -58,12 +58,12 @@ const INTERVENTION_LIBRARY = {
     inefficiency: {
       title: "Inefficient Edit Loop",
       message: "You are editing repeatedly with low forward progress.",
-      nextAction: "Pause and choose a 3-step plan before coding more.",
+      nextAction: "Pause and choose one clear next action before coding more.",
       actionPayloads: {
         show_fix: "Plan first: input shape, logic path, edge case handling.",
         give_hint: "One complete pass beats multiple partial rewrites.",
         refocus: "Stop typing for 20 seconds and commit to one planned step.",
-        summarize: "Summarize your 3-step implementation plan in one line."
+        summarize: "Summarize your immediate next action in one line."
       }
     }
   },

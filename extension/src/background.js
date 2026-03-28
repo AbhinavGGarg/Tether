@@ -177,9 +177,9 @@ function ensureSession(tabId, url, title) {
       domain: domainFromUrl(url),
       url,
       pageTitle: title || "",
-      category: "consuming_content",
-      activityType: "reading",
-      confidence: 0.4,
+      category: "unknown",
+      activityType: "none_detected",
+      confidence: 0,
       evidence: []
     },
     aggregate: {
@@ -268,6 +268,8 @@ function classifyContext(metrics, tab) {
   const url = metrics.url || tab?.url || "";
   const domain = domainFromUrl(url);
   const text = `${metrics.pageTitle} ${metrics.contextSample} ${metrics.pageTextSample}`.toLowerCase();
+  const isDecisionOsSurface =
+    domain.includes("nudge-frontend") || domain.includes("decisionos") || domain.includes("vercel.app");
 
   const codingSignals = [
     "function",
@@ -302,7 +304,10 @@ function classifyContext(metrics, tab) {
   ]) || includesAny(text, codingSignals);
 
   const isWatching = metrics.hasVideo || matchesAny(domain, ["youtube.com", "udemy.com", "vimeo.com", "netflix.com"]);
-  const isWriting = metrics.hasEditable || matchesAny(domain, ["docs.google.com", "notion.so", "medium.com"]) || includesAny(text, writingSignals);
+  const isWriting =
+    (metrics.hasEditable && metrics.typingSpeed > 0.45) ||
+    matchesAny(domain, ["docs.google.com", "notion.so", "medium.com"]) ||
+    includesAny(text, writingSignals);
   const isLearning = matchesAny(domain, [
     "khanacademy.org",
     "coursera.org",
@@ -311,37 +316,35 @@ function classifyContext(metrics, tab) {
     "wikipedia.org"
   ]) || includesAny(text, learningSignals);
 
-  let category = "consuming_content";
-  let activityType = "reading";
+  let category = "unknown";
+  let activityType = "none_detected";
+  let confidence = 0;
 
   if (isCoding) {
     category = "problem_solving";
     activityType = "coding";
     evidence.push("Code-like tokens detected");
-  } else if (isWriting && metrics.typingSpeed > 0.35) {
+    confidence = 0.8;
+  } else if (isWriting) {
     category = "writing";
     activityType = "writing";
     evidence.push("Active writing behavior");
+    confidence = 0.72;
   } else if (isWatching) {
     category = "consuming_content";
     activityType = "watching";
     evidence.push("Video consumption context");
+    confidence = 0.66;
   } else if (isLearning) {
     category = "learning";
     activityType = "studying";
     evidence.push("Educational context signal");
+    confidence = 0.7;
+  } else if (!isDecisionOsSurface && includesAny(text, ["article", "research", "blog", "paper", "report"])) {
+    category = "consuming_content";
+    activityType = "reading";
+    confidence = 0.52;
   }
-
-  const confidence = Number(
-    Math.min(
-      0.95,
-      0.45 +
-        (isCoding ? 0.22 : 0) +
-        (isWriting ? 0.18 : 0) +
-        (isWatching ? 0.15 : 0) +
-        (isLearning ? 0.15 : 0)
-    ).toFixed(2)
-  );
 
   return {
     domain,
@@ -349,15 +352,19 @@ function classifyContext(metrics, tab) {
     pageTitle: metrics.pageTitle,
     category,
     activityType,
-    confidence,
+    confidence: Number(confidence.toFixed(2)),
     evidence: evidence.slice(0, 3)
   };
 }
 
 function detectIssue(session, metrics, context) {
+  if (context.activityType === "none_detected") {
+    return null;
+  }
+
   const totalKeystrokes = session.aggregate.totalKeystrokes;
   const totalScrollDistance = session.aggregate.totalScrollDistance;
-  const meaningfulActivity = totalKeystrokes >= 4 || totalScrollDistance >= 600 || metrics.timeOnTaskMs > 20000;
+  const meaningfulActivity = totalKeystrokes >= 8 || totalScrollDistance >= 1000 || metrics.timeOnTaskMs > 45000;
 
   if (!meaningfulActivity) {
     return null;
@@ -371,7 +378,7 @@ function detectIssue(session, metrics, context) {
   const tabFactor = clamp(metrics.tabSwitchesDelta / 3);
   const scrollBurstFactor = clamp(metrics.scrollBursts / 12);
   const lowTypingFactor = clamp((0.8 - metrics.typingSpeed) / 0.8);
-  const slowProgress = metrics.timeOnTaskMs > 120000 && metrics.typingSpeed < 0.45 ? clamp(metrics.timeOnTaskMs / 360000) : 0;
+  const slowProgress = metrics.timeOnTaskMs > 150000 && metrics.typingSpeed < 0.4 ? clamp(metrics.timeOnTaskMs / 420000) : 0;
 
   const confusionScore =
     pauseFactor * 0.35 + repeatFactor * 0.25 + retriesFactor * 0.2 + deletionFactor * 0.2;
@@ -492,11 +499,11 @@ function buildIntervention(issue, context) {
       inefficiency: {
         title: "Simpler Path Available",
         message: "Your workflow looks repetitive. Want a faster strategy?",
-        nextAction: "Plan 3 steps before editing more lines.",
-        fix: "Write pseudo-steps first, then implement once instead of repeated rewrites.",
+        nextAction: "Define one clear next action before editing more.",
+        fix: "State one target outcome, then implement directly.",
         hint: "Optimize for one complete pass over multiple partial edits.",
         refocus: "Pause for 20 seconds and commit to one planned step.",
-        summary: "Summarize your 3-step implementation plan."
+        summary: "Summarize your immediate next action."
       }
     },
     writing: {

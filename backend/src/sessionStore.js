@@ -301,7 +301,7 @@ function buildImprovementSuggestions(session, contextBreakdown) {
   }
 
   if ((session.issueCounters.inefficiency || 0) > 0) {
-    suggestions.push("Switch from reactive edits to a 3-step micro-plan before acting.");
+    suggestions.push("Switch from reactive edits to one clear next action before acting.");
   }
 
   if (suggestions.length === 0) {
@@ -349,9 +349,9 @@ function emptyContext() {
     domain: "unknown",
     url: "",
     pageTitle: "",
-    category: "consuming_content",
-    activityType: "reading",
-    confidence: 0.4,
+    category: "unknown",
+    activityType: "none_detected",
+    confidence: 0,
     evidence: []
   };
 }

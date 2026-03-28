@@ -4,54 +4,6 @@ import FloatingAssistant from "../components/FloatingAssistant";
 import InterventionPopup from "../components/InterventionPopup";
 import { endSession, markInterventionApplied, recordMetrics, startSession } from "../lib/api";
 
-const SCENARIO_PRESETS = {
-  studying: {
-    label: "Studying",
-    title: "Neuroscience Lesson: Memory and Recall",
-    url: "https://learn.example.com/course/memory-and-recall",
-    pageText:
-      "This lesson covers active recall, spaced repetition, and memory consolidation. Practice by summarizing each section from memory.",
-    hasVideo: false,
-    hasEditable: false
-  },
-  coding: {
-    label: "Coding",
-    title: "Fix failing API pagination function",
-    url: "https://github.com/team/project/pull/142",
-    pageText:
-      "The function paginateResults currently returns duplicate values under high load. Investigate edge cases and async race conditions.",
-    hasVideo: false,
-    hasEditable: true
-  },
-  writing: {
-    label: "Writing",
-    title: "Quarterly Strategy Memo Draft",
-    url: "https://docs.google.com/document/d/decisionos-memo",
-    pageText:
-      "Draft a memo that explains strategic priorities, risks, and execution plan. Prioritize clarity and concise recommendations.",
-    hasVideo: false,
-    hasEditable: true
-  },
-  watching: {
-    label: "Watching",
-    title: "Productivity Workshop Recording",
-    url: "https://www.youtube.com/watch?v=decisionos-demo",
-    pageText:
-      "Video on focus systems and reducing context switching. Note key ideas and convert them into one immediate action.",
-    hasVideo: true,
-    hasEditable: false
-  },
-  browsing: {
-    label: "Browsing",
-    title: "Industry News Feed",
-    url: "https://news.example.com/technology-feed",
-    pageText:
-      "Multiple short posts and trend updates. Risk: passive scrolling without extracting decisions or next steps.",
-    hasVideo: false,
-    hasEditable: false
-  }
-};
-
 function WorkspacePage() {
   const navigate = useNavigate();
 
@@ -64,9 +16,9 @@ function WorkspacePage() {
 
   const [context, setContext] = useState({
     domain: window.location.hostname,
-    category: "consuming_content",
-    activityType: "reading",
-    confidence: 0.4
+    category: "unknown",
+    activityType: "none_detected",
+    confidence: 0
   });
 
   const [signal, setSignal] = useState({
@@ -93,7 +45,6 @@ function WorkspacePage() {
   const [interventionHistory, setInterventionHistory] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [impactNote, setImpactNote] = useState("No intervention impact yet.");
-  const [scenarioKey, setScenarioKey] = useState("studying");
 
   const sessionStartRef = useRef(Date.now());
   const lastInputRef = useRef(Date.now());
@@ -189,14 +140,12 @@ function WorkspacePage() {
         tabSwitchesDelta: tabSwitchesDeltaRef.current,
         timeOnTaskMs: now - sessionStartRef.current,
         keystrokesDelta: keystrokesDeltaRef.current,
-        pageTitle: SCENARIO_PRESETS[scenarioKey]?.title || document.title,
-        url: SCENARIO_PRESETS[scenarioKey]?.url || window.location.href,
-        contextSample: `${SCENARIO_PRESETS[scenarioKey]?.title || document.title}\n${(
-          SCENARIO_PRESETS[scenarioKey]?.pageText || ""
-        ).slice(0, 280)}`,
-        pageTextSample: SCENARIO_PRESETS[scenarioKey]?.pageText || extractPageTextSample(),
-        hasVideo: Boolean(SCENARIO_PRESETS[scenarioKey]?.hasVideo || document.querySelector("video")),
-        hasEditable: Boolean(SCENARIO_PRESETS[scenarioKey]?.hasEditable || hasEditableSurface())
+        pageTitle: document.title,
+        url: window.location.href,
+        contextSample: `${document.title}\n${extractWorkingText().slice(0, 280)}`,
+        pageTextSample: extractPageTextSample(),
+        hasVideo: Boolean(document.querySelector("video")),
+        hasEditable: Boolean(hasEditableSurface())
       };
 
       const realtime = recordMetrics(sessionId, metrics);
@@ -206,6 +155,9 @@ function WorkspacePage() {
       }
       if (realtime?.context) {
         setContext(realtime.context);
+        if (realtime.context.activityType === "none_detected") {
+          setActiveIntervention(null);
+        }
       }
       if (realtime?.timeline) {
         setTimeline(realtime.timeline);
@@ -239,7 +191,7 @@ function WorkspacePage() {
     }, 2000);
 
     return () => clearInterval(timer);
-  }, [sessionId, scenarioKey]);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -403,20 +355,12 @@ function WorkspacePage() {
           <article className="panel panel-main">
             <h3>Live Context Engine</h3>
             <div className="timeline-box">
-              <h4>Simulated Environment</h4>
-              <div className="action-row">
-                {Object.entries(SCENARIO_PRESETS).map(([key, preset]) => (
-                  <button
-                    key={key}
-                    className={`btn ${scenarioKey === key ? "btn-primary" : "btn-ghost"}`}
-                    onClick={() => setScenarioKey(key)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
+              <h4>Live Page Source</h4>
+              <p>{window.location.href}</p>
               <p style={{ marginTop: 8 }}>
-                {SCENARIO_PRESETS[scenarioKey]?.title} · {SCENARIO_PRESETS[scenarioKey]?.url}
+                {context.activityType === "none_detected"
+                  ? "No supported context detected on this site yet."
+                  : "Context detected from your current page and live behavior."}
               </p>
             </div>
 
@@ -489,7 +433,9 @@ function WorkspacePage() {
         <FloatingAssistant context={context} signal={signal} intervention={activeIntervention || interventionHistory[0]} />
       ) : null}
 
-      {sessionId ? <InterventionPopup intervention={activeIntervention} onAction={handleInterventionAction} /> : null}
+      {sessionId && context.activityType !== "none_detected" ? (
+        <InterventionPopup intervention={activeIntervention} onAction={handleInterventionAction} />
+      ) : null}
     </main>
   );
 }
@@ -531,6 +477,27 @@ function extractPageTextSample() {
     document.querySelector("main") || document.querySelector("article") || document.querySelector("section") || document.body;
   const text = (candidate?.innerText || "").replace(/\s+/g, " ").trim();
   return text.slice(0, 700);
+}
+
+function extractWorkingText() {
+  const active = document.activeElement;
+
+  if (active instanceof HTMLTextAreaElement) {
+    return active.value || "";
+  }
+
+  if (active instanceof HTMLInputElement) {
+    const type = (active.type || "text").toLowerCase();
+    if (["text", "search", "url", "email", "number"].includes(type)) {
+      return active.value || "";
+    }
+  }
+
+  if (active instanceof HTMLElement && active.isContentEditable) {
+    return active.textContent || "";
+  }
+
+  return "";
 }
 
 function hasEditableSurface() {

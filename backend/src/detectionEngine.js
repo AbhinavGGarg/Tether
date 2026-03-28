@@ -27,40 +27,44 @@ function classifyContext(metrics) {
   const url = metrics.url || "";
   const domain = domainFromUrl(url);
   const text = `${metrics.pageTitle} ${metrics.contextSample} ${metrics.pageTextSample}`.toLowerCase();
+  const isDecisionOsSurface =
+    domain.includes("nudge-frontend") || domain.includes("decisionos") || domain.includes("vercel.app");
 
   const isCoding = matchesContext("coding", domain, text);
   const isWatching = metrics.hasVideo || matchesContext("watching", domain, text);
-  const isWriting = metrics.hasEditable || matchesContext("writing", domain, text);
+  const isWriting = (metrics.hasEditable && metrics.typingSpeed > 0.45) || matchesContext("writing", domain, text);
   const isStudying = matchesContext("studying", domain, text);
 
-  let activityType = "reading";
-  let category = "consuming_content";
+  let activityType = "none_detected";
+  let category = "unknown";
+  let confidence = 0;
   const evidence = [];
 
   if (isCoding) {
     activityType = "coding";
     category = "problem_solving";
     evidence.push("Code context signal");
-  } else if (isWriting && metrics.typingSpeed > 0.3) {
+    confidence = 0.8;
+  } else if (isWriting) {
     activityType = "writing";
     category = "writing";
     evidence.push("Active writing signal");
+    confidence = 0.72;
   } else if (isWatching) {
     activityType = "watching";
     category = "consuming_content";
     evidence.push("Video context signal");
+    confidence = 0.66;
   } else if (isStudying) {
     activityType = "studying";
     category = "learning";
     evidence.push("Learning context signal");
+    confidence = 0.7;
+  } else if (!isDecisionOsSurface && includesAny(text, ["article", "research", "blog", "paper", "report"])) {
+    activityType = "reading";
+    category = "consuming_content";
+    confidence = 0.52;
   }
-
-  const confidence = Number(
-    Math.min(
-      0.95,
-      0.45 + (isCoding ? 0.22 : 0) + (isWriting ? 0.18 : 0) + (isWatching ? 0.15 : 0) + (isStudying ? 0.15 : 0)
-    ).toFixed(2)
-  );
 
   return {
     domain,
@@ -68,7 +72,7 @@ function classifyContext(metrics) {
     pageTitle: metrics.pageTitle,
     category,
     activityType,
-    confidence,
+    confidence: Number(confidence.toFixed(2)),
     evidence: evidence.slice(0, 3)
   };
 }
@@ -78,10 +82,14 @@ function detectIssue(session, metrics, context) {
     return null;
   }
 
+  if (context.activityType === "none_detected") {
+    return null;
+  }
+
   const meaningfulActivity =
-    session.aggregate.totalKeystrokes >= 4 ||
-    session.aggregate.totalScrollDistance >= 600 ||
-    metrics.timeOnTaskMs > 20000;
+    session.aggregate.totalKeystrokes >= 8 ||
+    session.aggregate.totalScrollDistance >= 1000 ||
+    metrics.timeOnTaskMs > 45000;
 
   if (!meaningfulActivity) {
     return null;
@@ -95,7 +103,7 @@ function detectIssue(session, metrics, context) {
   const tabFactor = clamp(metrics.tabSwitchesDelta / 3);
   const scrollBurstFactor = clamp(metrics.scrollBursts / 12);
   const lowTypingFactor = clamp((0.8 - metrics.typingSpeed) / 0.8);
-  const slowProgress = metrics.timeOnTaskMs > 120000 && metrics.typingSpeed < 0.45 ? clamp(metrics.timeOnTaskMs / 360000) : 0;
+  const slowProgress = metrics.timeOnTaskMs > 150000 && metrics.typingSpeed < 0.4 ? clamp(metrics.timeOnTaskMs / 420000) : 0;
 
   const confusionScore =
     pauseFactor * 0.35 + repeatFactor * 0.25 + retriesFactor * 0.2 + deletionFactor * 0.2;
@@ -176,9 +184,9 @@ function emptyContext() {
     domain: "unknown",
     url: "",
     pageTitle: "",
-    category: "consuming_content",
-    activityType: "reading",
-    confidence: 0.4,
+    category: "unknown",
+    activityType: "none_detected",
+    confidence: 0,
     evidence: []
   };
 }
@@ -219,6 +227,10 @@ function clamp(value) {
 function numberOrZero(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function includesAny(text, tokens) {
+  return tokens.some((token) => text.includes(token));
 }
 
 export { buildSignal, classifyContext, detectIssue, emptyContext, emptySignal, normalizeMetrics };

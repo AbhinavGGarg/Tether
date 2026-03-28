@@ -58,8 +58,8 @@ async function refresh() {
 
 function render(state) {
   if (!state) {
-    el.activity.textContent = "activity: reading";
-    el.category.textContent = "category: consuming_content";
+    el.activity.textContent = "activity: none_detected";
+    el.category.textContent = "category: unknown";
     el.domain.textContent = "domain: unknown";
     el.issue.textContent = "None";
     el.friction.textContent = "0%";
@@ -83,8 +83,8 @@ function render(state) {
     Math.max(signal.confusionScore || 0, signal.distractionScore || 0, signal.inefficiencyScore || 0) * 100
   );
 
-  el.activity.textContent = `activity: ${context.activityType || "reading"}`;
-  el.category.textContent = `category: ${context.category || "consuming_content"}`;
+  el.activity.textContent = `activity: ${context.activityType || "none_detected"}`;
+  el.category.textContent = `category: ${context.category || "unknown"}`;
   el.domain.textContent = `domain: ${context.domain || "unknown"}`;
   el.issue.textContent = signal.issueType ? `${signal.issueType} (${signal.issueSeverity || "low"})` : "None";
   el.friction.textContent = `${friction}%`;

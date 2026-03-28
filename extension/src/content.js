@@ -25,9 +25,9 @@ let currentSignal = {
 };
 let currentContext = {
   domain: window.location.hostname || "unknown",
-  category: "consuming_content",
-  activityType: "reading",
-  confidence: 0.4
+  category: "unknown",
+  activityType: "none_detected",
+  confidence: 0
 };
 let recentTimeline = [];
 let actionDetail = "";
@@ -194,7 +194,10 @@ function publishMetrics() {
     }
     if (response.intervention) {
       lastIntervention = response.intervention;
-      revealSuggestion = false;
+      actionDetail = "";
+    } else if (response.context?.activityType === "none_detected") {
+      lastIntervention = null;
+      actionDetail = "";
     }
 
     renderOverlay();
@@ -372,7 +375,7 @@ function renderOverlay() {
     ? `${currentSignal.issueType} (${currentSignal.issueSeverity || "low"})`
     : "No active issue";
 
-  const contextLine = `${currentContext.activityType || "reading"} • ${currentContext.category || "consuming_content"}`;
+  const contextLine = `${currentContext.activityType || "none_detected"} • ${currentContext.category || "unknown"}`;
 
   if (isCollapsed) {
     overlayBody.innerHTML = `
