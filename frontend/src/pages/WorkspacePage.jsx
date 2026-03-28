@@ -280,18 +280,6 @@ function WorkspacePage() {
             ))}
           </div>
 
-          {selectedProblem ? (
-            <div className="problem-card">
-              <h2>{selectedProblem.title}</h2>
-              <p>{selectedProblem.prompt}</p>
-              <div className="concept-row">
-                {selectedProblem.concepts.map((concept) => (
-                  <span key={concept}>{concept}</span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
           <textarea
             className="code-editor"
             value={answer}
