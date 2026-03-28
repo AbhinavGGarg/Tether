@@ -3,14 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DecisionOS</title>
+    <title>Nudge</title>
     <style>
       :root {
         --ink: #0f172a;
         --muted: #475569;
         --line: rgba(15, 23, 42, 0.14);
         --brand: #0ea5e9;
-        --accent: #f97316;
+        --danger: #ef4444;
+        --warn: #f59e0b;
+        --good: #22c55e;
       }
 
       body {
@@ -27,11 +29,17 @@
         gap: 10px;
       }
 
-      .top {
+      .top,
+      .panel,
+      .card {
         border: 1px solid var(--line);
         border-radius: 12px;
-        padding: 10px;
         background: white;
+      }
+
+      .top,
+      .panel {
+        padding: 10px;
       }
 
       .title {
@@ -69,10 +77,7 @@
       }
 
       .card {
-        border: 1px solid var(--line);
-        border-radius: 10px;
         padding: 8px;
-        background: white;
       }
 
       .label {
@@ -86,11 +91,23 @@
         font-size: 13px;
       }
 
-      .panel {
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        background: white;
-        padding: 10px;
+      .score {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.1);
+        margin-top: 6px;
+        overflow: hidden;
+      }
+
+      .score > span {
+        display: block;
+        height: 100%;
+        background: linear-gradient(90deg, var(--danger), var(--warn));
+      }
+
+      .focus-score > span {
+        background: linear-gradient(90deg, var(--brand), var(--good));
       }
 
       .panel h3 {
@@ -121,30 +138,26 @@
         font-size: 12px;
       }
 
-      .score {
-        width: 100%;
-        height: 8px;
-        border-radius: 999px;
-        background: rgba(15, 23, 42, 0.1);
-        margin-top: 6px;
-        overflow: hidden;
-      }
-
-      .score > span {
-        display: block;
-        height: 100%;
-        background: linear-gradient(90deg, var(--brand), var(--accent));
+      .link {
+        display: inline-flex;
+        padding: 7px 10px;
+        border-radius: 8px;
+        text-decoration: none;
+        font-weight: 700;
+        color: #0c4a6e;
+        border: 1px solid rgba(14, 165, 233, 0.35);
+        background: rgba(14, 165, 233, 0.08);
       }
     </style>
   </head>
   <body>
     <main class="shell">
       <section class="top">
-        <p class="title">DecisionOS Context Monitor</p>
+        <p class="title">Nudge Context Monitor</p>
         <p class="sub" id="tab-url">Waiting for active tab...</p>
         <div class="tag-row">
-          <span class="tag" id="activity">activity: reading</span>
-          <span class="tag" id="category">category: consuming_content</span>
+          <span class="tag" id="activity">activity: none_detected</span>
+          <span class="tag" id="category">category: unknown</span>
           <span class="tag" id="domain">domain: unknown</span>
         </div>
       </section>
@@ -155,9 +168,14 @@
           <div class="value" id="issue">None</div>
         </article>
         <article class="card">
-          <div class="label">Friction</div>
+          <div class="label">Risk Level</div>
           <div class="value" id="friction">0%</div>
           <div class="score"><span id="friction-bar" style="width: 0%"></span></div>
+        </article>
+        <article class="card">
+          <div class="label">Focus Score</div>
+          <div class="value" id="focus">72%</div>
+          <div class="score focus-score"><span id="focus-bar" style="width: 72%"></span></div>
         </article>
         <article class="card">
           <div class="label">Typing Speed</div>
@@ -166,10 +184,6 @@
         <article class="card">
           <div class="label">Idle</div>
           <div class="value" id="idle">0s</div>
-        </article>
-        <article class="card">
-          <div class="label">Keystrokes</div>
-          <div class="value" id="keys">0</div>
         </article>
         <article class="card">
           <div class="label">Tab Switches</div>
@@ -185,6 +199,10 @@
       <section class="panel">
         <h3>Timeline</h3>
         <div id="timeline" class="empty">No events yet.</div>
+      </section>
+
+      <section class="panel">
+        <a id="results-link" class="link" href="https://nudge-frontend-ten.vercel.app" target="_blank" rel="noopener noreferrer">View your real live results</a>
       </section>
     </main>
 

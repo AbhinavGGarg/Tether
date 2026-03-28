@@ -58,7 +58,7 @@ class SessionStore {
       }
     };
 
-    addTimeline(session, "session_started", "Live monitoring started", "DecisionOS session initialized");
+    addTimeline(session, "session_started", "Live monitoring started", "Nudge session initialized");
     this.sessions.set(id, session);
     return session;
   }

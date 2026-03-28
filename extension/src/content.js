@@ -1,4 +1,5 @@
 const NUDGE_TAG = "nudge-extension-root";
+const LIVE_RESULTS_FALLBACK = "https://nudge-frontend-ten.vercel.app";
 
 let sessionStartedAt = Date.now();
 let lastInputAt = Date.now();
@@ -16,25 +17,39 @@ let lastScrollY = window.scrollY || 0;
 let previousText = "";
 
 let lastIntervention = null;
+let actionDetail = "";
+let impactMessage = "";
+let resultsUrl = LIVE_RESULTS_FALLBACK;
+let recentTimeline = [];
+
 let currentSignal = {
   issueType: null,
   issueSeverity: null,
-  confusionScore: 0,
+  procrastinationScore: 0,
   distractionScore: 0,
-  inefficiencyScore: 0
+  lowFocusScore: 0,
+  inefficiencyScore: 0,
+  focusScore: 72,
+  focusImprovementPct: 0
 };
+
 let currentContext = {
   domain: window.location.hostname || "unknown",
   category: "unknown",
   activityType: "none_detected",
   confidence: 0
 };
-let recentTimeline = [];
-let actionDetail = "";
+
+const focusTimer = {
+  running: false,
+  startedAt: 0,
+  durationMs: 60000,
+  remainingMs: 60000,
+  intervalId: null
+};
 
 let isCollapsed = false;
 let isClosed = false;
-
 let overlay;
 let overlayBody;
 let overlayTitle;
@@ -58,7 +73,12 @@ function boot() {
     }
 
     if (message.type === "NUDGE_INTERVENTION") {
-      lastIntervention = message.intervention || lastIntervention;
+      if (focusTimer.running) {
+        sendResponse({ ok: true, ignored: true });
+        return;
+      }
+
+      lastIntervention = message.intervention || null;
       currentSignal = message.signal || currentSignal;
       currentContext = message.context || currentContext;
       recentTimeline = message.timeline || recentTimeline;
@@ -192,12 +212,18 @@ function publishMetrics() {
     if (response.timeline) {
       recentTimeline = response.timeline;
     }
-    if (response.intervention) {
-      lastIntervention = response.intervention;
-      actionDetail = "";
-    } else if (response.context?.activityType === "none_detected") {
+    if (response.liveResultsUrl) {
+      resultsUrl = response.liveResultsUrl;
+    }
+
+    if (response.context?.activityType === "none_detected") {
       lastIntervention = null;
       actionDetail = "";
+      impactMessage = "";
+    } else if (!focusTimer.running && response.intervention) {
+      lastIntervention = response.intervention;
+      actionDetail = "";
+      impactMessage = "";
     }
 
     renderOverlay();
@@ -210,9 +236,11 @@ function handleInterventionAction(action) {
   }
 
   const actionPayloads = lastIntervention.actionPayloads || {};
-  const immediateDetail = actionPayloads[action] || lastIntervention.nextAction || "";
-  actionDetail = immediateDetail;
-  renderOverlay();
+  actionDetail = actionPayloads[action] || lastIntervention.nextAction || "";
+
+  if (action === "refocus_timer") {
+    startFocusTimer();
+  }
 
   chrome.runtime.sendMessage(
     {
@@ -238,15 +266,64 @@ function handleInterventionAction(action) {
       if (response.intervention) {
         lastIntervention = response.intervention;
       }
+      if (response.liveResultsUrl) {
+        resultsUrl = response.liveResultsUrl;
+      }
 
-      if (action === "refocus") {
+      if (currentSignal.focusImprovementPct > 0) {
+        impactMessage = `Focus improved by ${currentSignal.focusImprovementPct}%`;
+      }
+
+      if (action === "short_break") {
         lastIntervention = null;
-        actionDetail = "";
+      }
+
+      if (action === "resume_task") {
+        lastIntervention = null;
       }
 
       renderOverlay();
     }
   );
+}
+
+function startFocusTimer() {
+  if (focusTimer.running) {
+    return;
+  }
+
+  focusTimer.running = true;
+  focusTimer.startedAt = Date.now();
+  focusTimer.remainingMs = focusTimer.durationMs;
+
+  if (focusTimer.intervalId) {
+    clearInterval(focusTimer.intervalId);
+  }
+
+  focusTimer.intervalId = setInterval(() => {
+    const elapsed = Date.now() - focusTimer.startedAt;
+    focusTimer.remainingMs = Math.max(0, focusTimer.durationMs - elapsed);
+
+    if (focusTimer.remainingMs <= 0) {
+      clearInterval(focusTimer.intervalId);
+      focusTimer.intervalId = null;
+      focusTimer.running = false;
+      impactMessage = "Focus restored. Focus improved by 40%";
+      currentSignal.focusScore = Math.min(100, (currentSignal.focusScore || 60) + 40);
+      currentSignal.issueType = null;
+      currentSignal.issueSeverity = null;
+
+      recentTimeline.unshift({
+        id: `local-${Date.now()}`,
+        eventType: "focus_restored",
+        label: "Focus improved",
+        ts: Date.now()
+      });
+      recentTimeline = recentTimeline.slice(0, 10);
+    }
+
+    renderOverlay();
+  }, 500);
 }
 
 function createOverlay() {
@@ -263,15 +340,16 @@ function createOverlay() {
       "position:fixed",
       "right:14px",
       "bottom:14px",
-      "width:360px",
+      "width:390px",
       "max-width:calc(100vw - 28px)",
       "z-index:2147483646",
-      "border-radius:14px",
-      "background:rgba(2, 6, 23, 0.95)",
+      "border-radius:16px",
+      "background:rgba(2, 6, 23, 0.96)",
       "border:1px solid rgba(148,163,184,0.35)",
-      "box-shadow:0 18px 42px rgba(2,6,23,0.35)",
+      "box-shadow:0 20px 45px rgba(2,6,23,0.38)",
       "font-family:Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-      "color:#e2e8f0"
+      "color:#e2e8f0",
+      "transition:all 180ms ease"
     ].join(";")
   );
 
@@ -288,8 +366,8 @@ function createOverlay() {
   );
 
   overlayTitle = document.createElement("strong");
-  overlayTitle.textContent = "DecisionOS Live";
-  overlayTitle.style.fontSize = "13px";
+  overlayTitle.textContent = "Nudge Live";
+  overlayTitle.style.fontSize = "14px";
 
   const controls = document.createElement("div");
   controls.setAttribute("style", "display:flex;align-items:center;gap:8px");
@@ -302,8 +380,8 @@ function createOverlay() {
       "background:#22d3ee",
       "color:#082f49",
       "border:1px solid #67e8f9",
-      "border-radius:8px",
-      "padding:4px 8px",
+      "border-radius:10px",
+      "padding:4px 10px",
       "cursor:pointer",
       "font-size:12px",
       "font-weight:700",
@@ -323,8 +401,8 @@ function createOverlay() {
       "background:rgba(239,68,68,0.15)",
       "color:#fecaca",
       "border:1px solid rgba(248,113,113,0.45)",
-      "border-radius:8px",
-      "padding:4px 8px",
+      "border-radius:10px",
+      "padding:4px 10px",
       "cursor:pointer",
       "font-size:12px",
       "line-height:1"
@@ -361,61 +439,83 @@ function renderOverlay() {
     return;
   }
 
-  overlay.style.width = isCollapsed ? "250px" : "360px";
+  overlay.style.width = isCollapsed ? "260px" : "390px";
   overlay.style.maxWidth = "calc(100vw - 28px)";
 
   if (overlayTitle) {
-    overlayTitle.textContent = isCollapsed ? "DecisionOS (Collapsed)" : "DecisionOS Live";
+    overlayTitle.textContent = isCollapsed ? "Nudge (Collapsed)" : "Nudge Live";
   }
   if (collapseBtn) {
     collapseBtn.textContent = isCollapsed ? "Expand" : "Collapse";
   }
 
-  const issueLabel = currentSignal.issueType
-    ? `${currentSignal.issueType} (${currentSignal.issueSeverity || "low"})`
-    : "No active issue";
-
+  const issueType = currentSignal.issueType;
+  const issueLabel = issueType ? `${issueType.replaceAll("_", " ")} (${currentSignal.issueSeverity || "low"})` : "No active issue";
   const contextLine = `${currentContext.activityType || "none_detected"} • ${currentContext.category || "unknown"}`;
+
+  const highestRisk = Math.max(
+    currentSignal.procrastinationScore || 0,
+    currentSignal.distractionScore || 0,
+    currentSignal.lowFocusScore || 0,
+    currentSignal.inefficiencyScore || 0
+  );
+
+  const tone = issueTone(issueType);
+  const issueColor = tone === "red" ? "#f87171" : tone === "yellow" ? "#facc15" : "#4ade80";
 
   if (isCollapsed) {
     overlayBody.innerHTML = `
       <div style="display:grid;gap:4px">
         <div><strong>Context:</strong> ${escapeHtml(contextLine)}</div>
         <div><strong>Issue:</strong> ${escapeHtml(issueLabel)}</div>
-        <div><strong>Friction:</strong> ${Math.round((currentSignal.confusionScore || 0) * 100)}%</div>
+        <div><strong>Focus:</strong> ${Math.round(currentSignal.focusScore || 0)}%</div>
       </div>
     `;
     return;
   }
 
-  const interventionHtml = lastIntervention
+  const timerProgress = Math.round(
+    ((focusTimer.durationMs - focusTimer.remainingMs) / Math.max(1, focusTimer.durationMs)) * 100
+  );
+
+  const timerHtml = focusTimer.running
     ? `
-      <div style="margin-top:10px;padding:9px;border-radius:10px;background:rgba(14,165,233,0.12);border:1px solid rgba(14,165,233,0.35)">
-        <div style="font-weight:700;color:#67e8f9">${escapeHtml(lastIntervention.title)}</div>
-        <div style="margin-top:4px">${escapeHtml(lastIntervention.message)}</div>
-        <div style="margin-top:6px;color:#cbd5e1"><strong>Try:</strong> ${escapeHtml(lastIntervention.nextAction)}</div>
-        <div style="margin-top:6px;padding:7px;border-radius:8px;background:rgba(15,23,42,0.35);display:${
-          actionDetail ? "block" : "none"
-        }">${escapeHtml(actionDetail || "")}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-          <button id="nudge-show-fix" style="background:#0ea5e9;color:#f8fafc;border:none;border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px">Show Fix</button>
-          <button id="nudge-give-hint" style="background:rgba(56,189,248,0.18);color:#e0f2fe;border:1px solid rgba(56,189,248,0.5);border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px">Give Hint</button>
-          <button id="nudge-refocus" style="background:#22c55e;color:#052e16;border:none;border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px;font-weight:700">Refocus</button>
-          <button id="nudge-summarize" style="background:rgba(148,163,184,0.2);color:#e2e8f0;border:1px solid rgba(148,163,184,0.35);border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px">Summarize</button>
+      <div style="margin-top:10px;padding:9px;border-radius:10px;border:1px solid rgba(14,165,233,0.5);background:rgba(14,165,233,0.12)">
+        <div style="font-weight:700;color:#67e8f9">Refocus Timer Running</div>
+        <div style="margin-top:4px">${Math.ceil(focusTimer.remainingMs / 1000)}s remaining</div>
+        <div style="margin-top:6px;height:7px;border-radius:999px;background:rgba(148,163,184,0.2);overflow:hidden">
+          <span style="display:block;height:100%;width:${timerProgress}%;background:linear-gradient(90deg,#22d3ee,#4ade80);transition:width 240ms ease"></span>
         </div>
       </div>
     `
-    : `<div style="margin-top:10px;color:#94a3b8">Monitoring context and behavior for real-time interventions.</div>`;
+    : "";
+
+  const interventionHtml = lastIntervention
+    ? `
+      <div style="margin-top:10px;padding:10px;border-radius:10px;border:1px solid ${issueColor};background:rgba(15,23,42,0.45);animation:nudgePulse 1.8s ease-in-out infinite">
+        <div style="font-weight:800;color:${issueColor};font-size:13px">${escapeHtml(lastIntervention.title)}</div>
+        <div style="margin-top:5px"><strong>What:</strong> ${escapeHtml(lastIntervention.what || lastIntervention.message)}</div>
+        <div style="margin-top:4px"><strong>Why:</strong> ${escapeHtml(lastIntervention.why || lastIntervention.reason || "Behavior drift detected.")}</div>
+        <div style="margin-top:4px"><strong>Next:</strong> ${escapeHtml(lastIntervention.nextAction)}</div>
+        <div style="margin-top:8px;padding:7px;border-radius:8px;background:rgba(15,23,42,0.4);display:${actionDetail ? "block" : "none"}">${escapeHtml(actionDetail || "")}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+          <button id="nudge-refocus" style="background:#22c55e;color:#052e16;border:none;border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px;font-weight:800" ${focusTimer.running ? "disabled" : ""}>Refocus (Start 60s timer)</button>
+          <button id="nudge-break-steps" style="background:#0ea5e9;color:#f8fafc;border:none;border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px" ${focusTimer.running ? "disabled" : ""}>Break into Steps</button>
+          <button id="nudge-try-new" style="background:rgba(250,204,21,0.18);color:#fde68a;border:1px solid rgba(250,204,21,0.45);border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px" ${focusTimer.running ? "disabled" : ""}>Try New Approach</button>
+          <button id="nudge-short-break" style="background:rgba(248,113,113,0.15);color:#fecaca;border:1px solid rgba(248,113,113,0.4);border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px" ${focusTimer.running ? "disabled" : ""}>Take Short Break</button>
+          <button id="nudge-resume" style="background:rgba(74,222,128,0.18);color:#86efac;border:1px solid rgba(74,222,128,0.45);border-radius:8px;padding:6px 9px;cursor:pointer;font-size:12px">Resume Task</button>
+        </div>
+      </div>
+    `
+    : `<div style="margin-top:10px;color:#94a3b8">Monitoring behavior. Interventions appear when risk patterns are detected.</div>`;
 
   const timelineHtml = recentTimeline.length
     ? recentTimeline
-        .slice(0, 4)
+        .slice(0, 5)
         .map(
           (item) => `
             <div style="margin-top:6px;padding-left:7px;border-left:2px solid rgba(249,115,22,0.45)">
-              <div style="font-size:11px;color:#fb923c;text-transform:uppercase">${escapeHtml(
-                formatEventType(item.eventType)
-              )}</div>
+              <div style="font-size:11px;color:#fb923c;text-transform:uppercase">${escapeHtml(formatEventType(item.eventType))}</div>
               <div>${escapeHtml(item.label || "Event")}</div>
             </div>
           `
@@ -424,39 +524,66 @@ function renderOverlay() {
     : `<div style="margin-top:6px;color:#94a3b8">No timeline events yet.</div>`;
 
   overlayBody.innerHTML = `
+    <style>@keyframes nudgePulse { 0% { box-shadow: 0 0 0 rgba(248,113,113,0); } 50% { box-shadow: 0 0 0 4px rgba(248,113,113,0.08); } 100% { box-shadow: 0 0 0 rgba(248,113,113,0); }}</style>
     <div style="display:grid;gap:4px">
       <div><strong>Status:</strong> Live monitoring</div>
       <div><strong>Context:</strong> ${escapeHtml(contextLine)}</div>
       <div><strong>Site:</strong> ${escapeHtml(currentContext.domain || window.location.hostname || "unknown")}</div>
-      <div><strong>Issue:</strong> ${escapeHtml(issueLabel)}</div>
+      <div><strong>Issue:</strong> <span style="color:${issueColor}">${escapeHtml(issueLabel)}</span></div>
+      <div><strong>Focus score:</strong> ${Math.round(currentSignal.focusScore || 0)}%</div>
       <div><strong>Keystrokes:</strong> ${totalKeystrokes}</div>
+      <div style="margin-top:3px;height:7px;border-radius:999px;background:rgba(148,163,184,0.2);overflow:hidden">
+        <span style="display:block;height:100%;width:${Math.round(highestRisk * 100)}%;background:linear-gradient(90deg,#f87171,#facc15);transition:width 220ms ease"></span>
+      </div>
     </div>
 
+    ${timerHtml}
+
     ${interventionHtml}
+
+    <div style="margin-top:8px;color:#86efac;min-height:16px;font-weight:700">${escapeHtml(impactMessage)}</div>
 
     <div style="margin-top:10px;border-top:1px solid rgba(148,163,184,0.2);padding-top:8px">
       <div style="font-weight:700;color:#cbd5e1">Timeline</div>
       ${timelineHtml}
     </div>
+
+    <div style="margin-top:10px;display:flex;justify-content:flex-end">
+      <a href="${escapeHtml(resultsUrl || LIVE_RESULTS_FALLBACK)}" target="_blank" rel="noopener noreferrer" style="color:#67e8f9;text-decoration:none;font-weight:700;border:1px solid rgba(103,232,249,0.45);padding:6px 10px;border-radius:8px">View your real live results</a>
+    </div>
   `;
 
-  const showFixBtn = overlayBody.querySelector("#nudge-show-fix");
-  const giveHintBtn = overlayBody.querySelector("#nudge-give-hint");
   const refocusBtn = overlayBody.querySelector("#nudge-refocus");
-  const summarizeBtn = overlayBody.querySelector("#nudge-summarize");
+  const breakStepsBtn = overlayBody.querySelector("#nudge-break-steps");
+  const tryNewBtn = overlayBody.querySelector("#nudge-try-new");
+  const shortBreakBtn = overlayBody.querySelector("#nudge-short-break");
+  const resumeBtn = overlayBody.querySelector("#nudge-resume");
 
-  if (showFixBtn && lastIntervention) {
-    showFixBtn.addEventListener("click", () => handleInterventionAction("show_fix"));
-  }
-  if (giveHintBtn && lastIntervention) {
-    giveHintBtn.addEventListener("click", () => handleInterventionAction("give_hint"));
-  }
   if (refocusBtn && lastIntervention) {
-    refocusBtn.addEventListener("click", () => handleInterventionAction("refocus"));
+    refocusBtn.addEventListener("click", () => handleInterventionAction("refocus_timer"));
   }
-  if (summarizeBtn && lastIntervention) {
-    summarizeBtn.addEventListener("click", () => handleInterventionAction("summarize"));
+  if (breakStepsBtn && lastIntervention) {
+    breakStepsBtn.addEventListener("click", () => handleInterventionAction("break_steps"));
   }
+  if (tryNewBtn && lastIntervention) {
+    tryNewBtn.addEventListener("click", () => handleInterventionAction("try_new_approach"));
+  }
+  if (shortBreakBtn && lastIntervention) {
+    shortBreakBtn.addEventListener("click", () => handleInterventionAction("short_break"));
+  }
+  if (resumeBtn && lastIntervention) {
+    resumeBtn.addEventListener("click", () => handleInterventionAction("resume_task"));
+  }
+}
+
+function issueTone(issueType) {
+  if (["procrastination", "distraction"].includes(issueType)) {
+    return "red";
+  }
+  if (["low_focus", "inefficiency"].includes(issueType)) {
+    return "yellow";
+  }
+  return "green";
 }
 
 function createReopenChip() {
@@ -467,7 +594,7 @@ function createReopenChip() {
 
   reopenChip = document.createElement("button");
   reopenChip.id = "nudge-reopen-chip";
-  reopenChip.textContent = "D";
+  reopenChip.textContent = "N";
   reopenChip.setAttribute(
     "style",
     [

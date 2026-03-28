@@ -24,9 +24,12 @@ function WorkspacePage() {
   const [signal, setSignal] = useState({
     issueType: null,
     issueSeverity: null,
-    confusionScore: 0,
+    procrastinationScore: 0,
     distractionScore: 0,
-    inefficiencyScore: 0
+    lowFocusScore: 0,
+    inefficiencyScore: 0,
+    focusScore: 72,
+    focusImprovementPct: 0
   });
 
   const [telemetry, setTelemetry] = useState({
@@ -92,9 +95,12 @@ function WorkspacePage() {
       setSignal({
         issueType: null,
         issueSeverity: null,
-        confusionScore: 0,
+        procrastinationScore: 0,
         distractionScore: 0,
-        inefficiencyScore: 0
+        lowFocusScore: 0,
+        inefficiencyScore: 0,
+        focusScore: 72,
+        focusImprovementPct: 0
       });
       setImpactNote("No intervention impact yet.");
       setActiveIntervention(null);
@@ -271,31 +277,32 @@ function WorkspacePage() {
           ? {
               ...item,
               userAction: action,
-              generatedSummary: update?.intervention?.generatedSummary || item.generatedSummary
+              improvementNote: update?.intervention?.improvementNote || item.improvementNote
             }
           : item
       )
     );
 
     const beforeMinutes = estimateWastedMinutes(signal, telemetry);
-    let afterMinutes = beforeMinutes;
+    const improvementMap = {
+      refocus_timer: 0.4,
+      break_steps: 0.25,
+      try_new_approach: 0.22,
+      short_break: 0.18,
+      resume_task: 0.2
+    };
 
-    if (action === "refocus") {
-      afterMinutes = Math.max(1, Math.round(beforeMinutes * 0.4));
-      setActiveIntervention(null);
-    } else if (action === "show_fix") {
-      afterMinutes = Math.max(1, Math.round(beforeMinutes * 0.6));
-    } else if (action === "give_hint") {
-      afterMinutes = Math.max(1, Math.round(beforeMinutes * 0.65));
-    } else if (action === "summarize") {
-      afterMinutes = Math.max(1, Math.round(beforeMinutes * 0.5));
-    }
-
+    const reductionWeight = improvementMap[action] || 0.2;
+    const afterMinutes = Math.max(1, Math.round(beforeMinutes * (1 - reductionWeight)));
     const reduction = Math.max(0, Math.round(((beforeMinutes - afterMinutes) / Math.max(1, beforeMinutes)) * 100));
+
     setImpactNote(`Estimated time waste: ~${beforeMinutes}m -> ~${afterMinutes}m (${reduction}% reduction)`);
 
-    const actionText = resolveActionText(intervention, action, update?.intervention);
-    return actionText;
+    if (action === "short_break" || action === "resume_task") {
+      setActiveIntervention(null);
+    }
+
+    return resolveActionText(intervention, action, update?.intervention);
   }
 
   async function goToDashboard() {
@@ -307,15 +314,31 @@ function WorkspacePage() {
     navigate(`/dashboard/${sessionId}`);
   }
 
+  function openLiveResults() {
+    if (!sessionId) {
+      return;
+    }
+    window.open(`/dashboard/${sessionId}`, "_blank", "noopener,noreferrer");
+  }
+
   const issueLabel = signal.issueType
-    ? `${signal.issueType} (${signal.issueSeverity || "low"})`
+    ? `${signal.issueType.replaceAll("_", " ")} (${signal.issueSeverity || "low"})`
     : "No active issue";
+
+  const riskPct = Math.round(
+    Math.max(
+      signal.procrastinationScore || 0,
+      signal.distractionScore || 0,
+      signal.lowFocusScore || 0,
+      signal.inefficiencyScore || 0
+    ) * 100
+  );
 
   return (
     <main className="page-shell">
       <header className="topbar">
         <div>
-          <h1>DecisionOS</h1>
+          <h1>Nudge</h1>
           <p>Context-aware real-time AI intervention system</p>
         </div>
         <div className="status-cluster">
@@ -323,6 +346,11 @@ function WorkspacePage() {
             {connected ? "Live Monitoring" : "Session not started"}
           </span>
           {learnerName ? <span className="status-pill online">Operator: {learnerName}</span> : null}
+          {sessionId ? (
+            <button className="btn btn-ghost" onClick={openLiveResults}>
+              View your real live results
+            </button>
+          ) : null}
           {sessionId ? (
             <button className="btn btn-primary" onClick={goToDashboard}>
               End Session + Dashboard
@@ -334,7 +362,7 @@ function WorkspacePage() {
       {!sessionId ? (
         <section className="panel">
           <h3>Create Operator Session</h3>
-          <p>Start a session to run live detection, intervention, and impact tracking.</p>
+          <p>Start a session to run live detection, interventions, and impact tracking.</p>
           <div className="action-row">
             <input
               value={learnerDraft}
@@ -354,6 +382,7 @@ function WorkspacePage() {
         <section className="workspace-grid">
           <article className="panel panel-main">
             <h3>Live Context Engine</h3>
+
             <div className="timeline-box">
               <h4>Live Page Source</h4>
               <p>{window.location.href}</p>
@@ -369,13 +398,13 @@ function WorkspacePage() {
               <Metric label="Category" value={context.category} />
               <Metric label="Domain" value={context.domain} />
               <Metric label="Confidence" value={`${Math.round((context.confidence || 0) * 100)}%`} />
+              <Metric label="Focus score" value={`${Math.round(signal.focusScore || 0)}%`} />
               <Metric label="Typing speed" value={`${telemetry.typingSpeed} keys/s`} />
               <Metric label="Idle" value={`${Math.round(telemetry.idleDurationMs / 1000)}s`} />
               <Metric label="Pause" value={`${Math.round(telemetry.pauseDurationMs / 1000)}s`} />
               <Metric label="Repeated actions" value={telemetry.repeatedActions} />
               <Metric label="Scroll speed" value={`${Math.round(telemetry.scrollSpeed)} px/s`} />
               <Metric label="Tab switches" value={telemetry.tabSwitchesDelta} />
-              <Metric label="Total keystrokes" value={telemetry.totalKeystrokes} />
               <Metric label="Time on task" value={`${Math.round(telemetry.timeOnTaskMs / 1000)}s`} />
             </div>
 
@@ -383,16 +412,7 @@ function WorkspacePage() {
               <h4>Current Issue</h4>
               <p>{issueLabel}</p>
               <div className="progress-track">
-                <span
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      Math.round(
-                        Math.max(signal.confusionScore, signal.distractionScore, signal.inefficiencyScore) * 100
-                      )
-                    )}%`
-                  }}
-                />
+                <span style={{ width: `${Math.min(100, riskPct)}%` }} />
               </div>
             </div>
 
@@ -408,7 +428,7 @@ function WorkspacePage() {
               {timeline.length === 0 ? <p>No events yet.</p> : null}
               {timeline.map((item) => (
                 <div key={item.id} className="timeline-item">
-                  <span>{item.eventType}</span>
+                  <span>{formatEventType(item.eventType)}</span>
                   <p>{item.label}</p>
                 </div>
               ))}
@@ -419,9 +439,10 @@ function WorkspacePage() {
               {interventionHistory.length === 0 ? <p>No interventions yet.</p> : null}
               {interventionHistory.map((item) => (
                 <div key={item.id} className="timeline-item">
-                  <span>{item.type}</span>
-                  <p>{item.message}</p>
-                  {item.userAction ? <p>Action: {item.userAction}</p> : null}
+                  <span>{item.type.replaceAll("_", " ")}</span>
+                  <p>{item.what || item.message}</p>
+                  {item.userAction ? <p>Action: {item.userAction.replaceAll("_", " ")}</p> : null}
+                  {item.improvementNote ? <p>{item.improvementNote}</p> : null}
                 </div>
               ))}
             </div>
@@ -430,7 +451,12 @@ function WorkspacePage() {
       ) : null}
 
       {sessionId ? (
-        <FloatingAssistant context={context} signal={signal} intervention={activeIntervention || interventionHistory[0]} />
+        <FloatingAssistant
+          context={context}
+          signal={signal}
+          intervention={activeIntervention || interventionHistory[0]}
+          sessionId={sessionId}
+        />
       ) : null}
 
       {sessionId && context.activityType !== "none_detected" ? (
@@ -452,22 +478,21 @@ function Metric({ label, value }) {
 function resolveActionText(intervention, action, updatedIntervention) {
   const payloads = intervention.actionPayloads || {};
 
-  if (action === "summarize" && updatedIntervention?.generatedSummary) {
-    return updatedIntervention.generatedSummary;
+  if (updatedIntervention?.improvementNote) {
+    return `${payloads[action] || intervention.nextAction} ${updatedIntervention.improvementNote}`;
   }
 
-  const mapped = {
-    show_fix: payloads.show_fix,
-    give_hint: payloads.give_hint,
-    refocus: payloads.refocus,
-    summarize: payloads.summarize
-  };
-
-  return mapped[action] || intervention.nextAction;
+  return payloads[action] || intervention.nextAction;
 }
 
 function estimateWastedMinutes(signal, telemetry) {
-  const friction = Math.max(signal.confusionScore || 0, signal.distractionScore || 0, signal.inefficiencyScore || 0);
+  const friction = Math.max(
+    signal.procrastinationScore || 0,
+    signal.distractionScore || 0,
+    signal.lowFocusScore || 0,
+    signal.inefficiencyScore || 0
+  );
+
   const base = Math.max(2, Math.round((telemetry.timeOnTaskMs || 0) / 60000));
   return Math.max(1, Math.round(base * (0.6 + friction)));
 }
@@ -506,6 +531,10 @@ function hasEditableSurface() {
       "textarea, [contenteditable='true'], input[type='text'], input[type='search'], input:not([type])"
     )
   );
+}
+
+function formatEventType(eventType) {
+  return String(eventType || "event").replaceAll("_", " ");
 }
 
 export default WorkspacePage;

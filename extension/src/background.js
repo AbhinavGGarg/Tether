@@ -1,20 +1,24 @@
 const tabSessions = new Map();
 
+const LIVE_RESULTS_URL = "https://nudge-frontend-ten.vercel.app";
+
 const SESSION_COOLDOWN_MS = {
-  confusion: 120000,
-  distraction: 90000,
-  inefficiency: 150000
+  procrastination: 90000,
+  distraction: 80000,
+  low_focus: 100000,
+  inefficiency: 110000
 };
 
 const ACTION_SNOOZE_MS = {
-  show_fix: 60000,
-  give_hint: 60000,
-  refocus: 180000,
-  summarize: 120000
+  refocus_timer: 180000,
+  break_steps: 90000,
+  try_new_approach: 90000,
+  short_break: 120000,
+  resume_task: 60000
 };
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ nudge_ready: true, nudge_version: "2.0.0" });
+  chrome.storage.local.set({ nudge_ready: true, nudge_version: "3.0.0" });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -64,25 +68,22 @@ async function handleMetricsMessage(message, sender) {
   session.updatedAt = Date.now();
 
   ingestMetrics(session, metrics);
-  const issue = detectIssue(session, metrics, context);
-  const signal = buildSignal(issue, metrics);
+
+  const detection = detectIssue(session, metrics, context);
+  const issue = detection.issue;
+  const signal = buildSignal(issue, detection.diagnostics, session.lastSignal);
 
   let intervention = null;
   if (issue) {
     bumpIssueCounters(session, issue.type);
-    addTimeline(
-      session,
-      "issue_detected",
-      `${capitalize(issue.type)} detected`,
-      `${context.activityType} on ${context.domain}`
-    );
+    addTimeline(session, "issue_detected", `${humanizeIssue(issue.type)} detected`, issue.reason);
 
     if (canEmitIntervention(session, issue.type)) {
-      intervention = buildIntervention(issue, context);
+      intervention = buildIntervention(issue, context, detection.diagnostics);
       session.interventions.unshift(intervention);
-      session.interventions = session.interventions.slice(0, 14);
+      session.interventions = session.interventions.slice(0, 20);
 
-      addTimeline(session, "intervention_triggered", intervention.title, intervention.message);
+      addTimeline(session, "intervention_triggered", intervention.title, intervention.what);
 
       chrome.tabs
         .sendMessage(tabId, {
@@ -90,7 +91,7 @@ async function handleMetricsMessage(message, sender) {
           intervention,
           signal,
           context,
-          timeline: session.timeline.slice(0, 8)
+          timeline: session.timeline.slice(0, 10)
         })
         .catch(() => {});
     }
@@ -104,7 +105,8 @@ async function handleMetricsMessage(message, sender) {
     signal,
     intervention,
     context,
-    timeline: session.timeline.slice(0, 8)
+    timeline: session.timeline.slice(0, 10),
+    liveResultsUrl: LIVE_RESULTS_URL
   };
 }
 
@@ -124,28 +126,33 @@ async function handleActionMessage(message, sender) {
       ok: true,
       signal: session.lastSignal,
       context: session.context,
-      timeline: session.timeline.slice(0, 8)
+      timeline: session.timeline.slice(0, 10),
+      liveResultsUrl: LIVE_RESULTS_URL
     };
   }
 
   target.userAction = action;
   target.respondedAt = Date.now();
-  target.applied = action === "refocus";
-
-  if (action === "refocus") {
-    simulateImprovement(session, target.type);
-  }
+  target.applied = ["refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(action);
 
   if (ACTION_SNOOZE_MS[action] && target.type) {
     session.snoozedByType[target.type] = Date.now() + ACTION_SNOOZE_MS[action];
   }
 
-  addTimeline(
-    session,
-    "user_action",
-    `User selected ${actionLabel(action)}`,
-    `${capitalize(target.type)} intervention`
-  );
+  const improvementPct = simulateImprovement(session, target.type, action);
+  if (improvementPct > 0) {
+    target.improvementNote = `Focus improved by ${improvementPct}%`;
+  }
+
+  addTimeline(session, "user_action", `User selected ${actionLabel(action)}`, `${humanizeIssue(target.type)} intervention`);
+
+  if (action === "refocus_timer") {
+    addTimeline(session, "focus_timer_started", "User started focus timer", "60-second refocus sprint started");
+  }
+
+  if (action === "resume_task") {
+    addTimeline(session, "focus_restored", "Focus improved", `Focus improved by ${improvementPct}%`);
+  }
 
   session.updatedAt = Date.now();
   await persistState(tabId, session);
@@ -155,7 +162,8 @@ async function handleActionMessage(message, sender) {
     signal: session.lastSignal,
     context: session.context,
     intervention: target,
-    timeline: session.timeline.slice(0, 8)
+    timeline: session.timeline.slice(0, 10),
+    liveResultsUrl: LIVE_RESULTS_URL
   };
 }
 
@@ -191,8 +199,9 @@ function ensureSession(tabId, url, title) {
       totalDetections: 0
     },
     issueCounters: {
-      confusion: 0,
+      procrastination: 0,
       distraction: 0,
+      low_focus: 0,
       inefficiency: 0
     },
     interventions: [],
@@ -202,9 +211,12 @@ function ensureSession(tabId, url, title) {
     lastSignal: {
       issueType: null,
       issueSeverity: null,
-      confusionScore: 0,
+      procrastinationScore: 0,
       distractionScore: 0,
-      inefficiencyScore: 0
+      lowFocusScore: 0,
+      inefficiencyScore: 0,
+      focusScore: 72,
+      focusImprovementPct: 0
     },
     lastMetrics: {
       typingSpeed: 0,
@@ -268,53 +280,24 @@ function classifyContext(metrics, tab) {
   const url = metrics.url || tab?.url || "";
   const domain = domainFromUrl(url);
   const text = `${metrics.pageTitle} ${metrics.contextSample} ${metrics.pageTextSample}`.toLowerCase();
-  const isDecisionOsSurface =
-    domain.includes("nudge-frontend") || domain.includes("decisionos") || domain.includes("vercel.app");
-
-  const codingSignals = [
-    "function",
-    "class ",
-    "const ",
-    "leetcode",
-    "github",
-    "stackblitz",
-    "replit",
-    "codesandbox",
-    "terminal"
-  ];
-  const learningSignals = [
-    "course",
-    "lesson",
-    "quiz",
-    "tutorial",
-    "lecture",
-    "chapter",
-    "practice"
-  ];
-  const writingSignals = ["draft", "paragraph", "essay", "outline", "document", "notion", "docs"];
+  const isNudgeSurface = domain.includes("nudge-frontend") || domain.includes("vercel.app");
 
   const evidence = [];
 
-  const isCoding = matchesAny(domain, [
-    "github.com",
-    "leetcode.com",
-    "replit.com",
-    "stackblitz.com",
-    "codesandbox.io"
-  ]) || includesAny(text, codingSignals);
+  const isCoding =
+    matchesAny(domain, ["github.com", "leetcode.com", "replit.com", "stackblitz.com", "codesandbox.io"]) ||
+    includesAny(text, ["function", "class ", "terminal", "compile", "debug", "repository"]);
 
-  const isWatching = metrics.hasVideo || matchesAny(domain, ["youtube.com", "udemy.com", "vimeo.com", "netflix.com"]);
   const isWriting =
     (metrics.hasEditable && metrics.typingSpeed > 0.45) ||
-    matchesAny(domain, ["docs.google.com", "notion.so", "medium.com"]) ||
-    includesAny(text, writingSignals);
-  const isLearning = matchesAny(domain, [
-    "khanacademy.org",
-    "coursera.org",
-    "edx.org",
-    "udemy.com",
-    "wikipedia.org"
-  ]) || includesAny(text, learningSignals);
+    matchesAny(domain, ["docs.google.com", "notion.so", "medium.com", "substack.com"]) ||
+    includesAny(text, ["draft", "essay", "paragraph", "outline", "document"]);
+
+  const isWatching = metrics.hasVideo || matchesAny(domain, ["youtube.com", "vimeo.com", "udemy.com", "netflix.com"]);
+
+  const isLearning =
+    matchesAny(domain, ["coursera.org", "edx.org", "khanacademy.org", "udemy.com", "wikipedia.org"]) ||
+    includesAny(text, ["lesson", "tutorial", "quiz", "practice", "chapter", "lecture"]);
 
   let category = "unknown";
   let activityType = "none_detected";
@@ -323,24 +306,24 @@ function classifyContext(metrics, tab) {
   if (isCoding) {
     category = "problem_solving";
     activityType = "coding";
-    evidence.push("Code-like tokens detected");
     confidence = 0.8;
+    evidence.push("Code context signal");
   } else if (isWriting) {
     category = "writing";
     activityType = "writing";
-    evidence.push("Active writing behavior");
     confidence = 0.72;
+    evidence.push("Active writing behavior");
   } else if (isWatching) {
     category = "consuming_content";
     activityType = "watching";
-    evidence.push("Video consumption context");
     confidence = 0.66;
+    evidence.push("Video context signal");
   } else if (isLearning) {
     category = "learning";
     activityType = "studying";
-    evidence.push("Educational context signal");
     confidence = 0.7;
-  } else if (!isDecisionOsSurface && includesAny(text, ["article", "research", "blog", "paper", "report"])) {
+    evidence.push("Learning context signal");
+  } else if (!isNudgeSurface && includesAny(text, ["article", "research", "blog", "paper", "report"])) {
     category = "consuming_content";
     activityType = "reading";
     confidence = 0.52;
@@ -358,97 +341,147 @@ function classifyContext(metrics, tab) {
 }
 
 function detectIssue(session, metrics, context) {
+  const baseDiagnostics = {
+    procrastinationScore: 0,
+    distractionScore: 0,
+    lowFocusScore: 0,
+    inefficiencyScore: 0,
+    focusScore: session.lastSignal?.focusScore || 72,
+    pauseDurationMs: metrics.pauseDurationMs,
+    idleDurationMs: metrics.idleDurationMs,
+    repeatedActions: metrics.repeatedActions,
+    tabSwitchesDelta: metrics.tabSwitchesDelta
+  };
+
   if (context.activityType === "none_detected") {
-    return null;
-  }
-
-  const totalKeystrokes = session.aggregate.totalKeystrokes;
-  const totalScrollDistance = session.aggregate.totalScrollDistance;
-  const meaningfulActivity = totalKeystrokes >= 8 || totalScrollDistance >= 1000 || metrics.timeOnTaskMs > 45000;
-
-  if (!meaningfulActivity) {
-    return null;
+    return { issue: null, diagnostics: baseDiagnostics };
   }
 
   const pauseFactor = clamp(metrics.pauseDurationMs / 22000);
-  const idleFactor = clamp(metrics.idleDurationMs / 30000);
+  const idleFactor = clamp(metrics.idleDurationMs / 45000);
   const repeatFactor = clamp(metrics.repeatedActions / 8);
-  const deletionFactor = clamp(metrics.deletionRate * 1.8);
   const retriesFactor = clamp(metrics.repeatedEdits / 7);
   const tabFactor = clamp(metrics.tabSwitchesDelta / 3);
-  const scrollBurstFactor = clamp(metrics.scrollBursts / 12);
-  const lowTypingFactor = clamp((0.8 - metrics.typingSpeed) / 0.8);
-  const slowProgress = metrics.timeOnTaskMs > 150000 && metrics.typingSpeed < 0.4 ? clamp(metrics.timeOnTaskMs / 420000) : 0;
+  const lowTypingFactor = clamp((0.9 - metrics.typingSpeed) / 0.9);
+  const activityVariance = clamp(
+    Math.abs(metrics.typingSpeed - (session.lastMetrics?.typingSpeed || 0)) / 1.2 + metrics.scrollBursts / 10
+  );
 
-  const confusionScore =
-    pauseFactor * 0.35 + repeatFactor * 0.25 + retriesFactor * 0.2 + deletionFactor * 0.2;
-  const distractionScore =
-    tabFactor * 0.35 + idleFactor * 0.35 + scrollBurstFactor * 0.2 + lowTypingFactor * 0.1;
-  const inefficiencyScore =
-    slowProgress * 0.4 + repeatFactor * 0.35 + clamp(metrics.scrollSpeed / 1600) * 0.15 + lowTypingFactor * 0.1;
+  const progressSignal = clamp((metrics.keystrokesDelta + metrics.scrollDistance / 400) / 8);
+  const lowProgressFactor = clamp(1 - progressSignal);
+
+  const procrastinationScore = tabFactor * 0.45 + activityVariance * 0.35 + lowProgressFactor * 0.2;
+  const distractionScore = idleFactor * 0.6 + pauseFactor * 0.25 + lowTypingFactor * 0.15;
+  const lowFocusScore = lowTypingFactor * 0.4 + pauseFactor * 0.35 + repeatFactor * 0.25;
+  const inefficiencyScore = repeatFactor * 0.45 + retriesFactor * 0.3 + lowProgressFactor * 0.25;
+
+  const focusPenalty =
+    procrastinationScore * 0.28 + distractionScore * 0.32 + lowFocusScore * 0.22 + inefficiencyScore * 0.18;
+  const focusScore = Math.round(Math.max(0, Math.min(100, 100 - focusPenalty * 85)));
+
+  const diagnostics = {
+    procrastinationScore: Number(procrastinationScore.toFixed(2)),
+    distractionScore: Number(distractionScore.toFixed(2)),
+    lowFocusScore: Number(lowFocusScore.toFixed(2)),
+    inefficiencyScore: Number(inefficiencyScore.toFixed(2)),
+    focusScore,
+    pauseDurationMs: metrics.pauseDurationMs,
+    idleDurationMs: metrics.idleDurationMs,
+    repeatedActions: metrics.repeatedActions,
+    tabSwitchesDelta: metrics.tabSwitchesDelta
+  };
+
+  if (metrics.idleDurationMs > 45000) {
+    return {
+      issue: {
+        type: "distraction",
+        score: diagnostics.distractionScore,
+        severity: severityFromScore(diagnostics.distractionScore),
+        reason: "No activity detected for an extended stretch."
+      },
+      diagnostics
+    };
+  }
+
+  const meaningfulActivity =
+    session.aggregate.totalKeystrokes >= 8 ||
+    session.aggregate.totalScrollDistance >= 1000 ||
+    metrics.timeOnTaskMs > 30000;
+
+  if (!meaningfulActivity) {
+    return { issue: null, diagnostics };
+  }
 
   const candidates = [
     {
-      type: "confusion",
-      score: confusionScore,
-      threshold: 0.62,
-      reason: `Behavior suggests a stuck moment while ${context.activityType}.`
+      type: "procrastination",
+      score: procrastinationScore,
+      threshold: 0.56,
+      reason: "You switched contexts multiple times recently. You may be procrastinating."
     },
     {
       type: "distraction",
       score: distractionScore,
-      threshold: 0.56,
-      reason: `Attention drift detected during ${context.activityType}.`
+      threshold: 0.58,
+      reason: "No activity trend suggests attention drift. Are you still working?"
+    },
+    {
+      type: "low_focus",
+      score: lowFocusScore,
+      threshold: 0.57,
+      reason: "Typing speed dropped and pauses increased. You may be losing focus."
     },
     {
       type: "inefficiency",
       score: inefficiencyScore,
-      threshold: 0.58,
-      reason: `Progress appears inefficient for the current context.`
+      threshold: 0.6,
+      reason: "You are repeating actions without visible progress."
     }
   ].sort((a, b) => b.score - a.score);
 
   const top = candidates[0];
   if (!top || top.score < top.threshold) {
-    return null;
+    return { issue: null, diagnostics };
   }
 
   session.aggregate.totalDetections += 1;
 
   return {
-    type: top.type,
-    score: Number(top.score.toFixed(2)),
-    severity: severityFromScore(top.score),
-    reason: top.reason,
-    diagnostics: {
-      confusionScore: Number(confusionScore.toFixed(2)),
-      distractionScore: Number(distractionScore.toFixed(2)),
-      inefficiencyScore: Number(inefficiencyScore.toFixed(2)),
-      pauseDurationMs: metrics.pauseDurationMs,
-      idleDurationMs: metrics.idleDurationMs,
-      repeatedActions: metrics.repeatedActions,
-      tabSwitchesDelta: metrics.tabSwitchesDelta
-    }
+    issue: {
+      type: top.type,
+      score: Number(top.score.toFixed(2)),
+      severity: severityFromScore(top.score),
+      reason: top.reason
+    },
+    diagnostics
   };
 }
 
-function buildSignal(issue) {
+function buildSignal(issue, diagnostics, previousSignal = null) {
+  const priorFocus = previousSignal?.focusScore || 72;
+
   if (!issue) {
     return {
       issueType: null,
       issueSeverity: null,
-      confusionScore: 0,
-      distractionScore: 0,
-      inefficiencyScore: 0
+      procrastinationScore: diagnostics?.procrastinationScore || 0,
+      distractionScore: diagnostics?.distractionScore || 0,
+      lowFocusScore: diagnostics?.lowFocusScore || 0,
+      inefficiencyScore: diagnostics?.inefficiencyScore || 0,
+      focusScore: diagnostics?.focusScore || priorFocus,
+      focusImprovementPct: 0
     };
   }
 
   return {
     issueType: issue.type,
     issueSeverity: issue.severity,
-    confusionScore: issue.diagnostics?.confusionScore || 0,
-    distractionScore: issue.diagnostics?.distractionScore || 0,
-    inefficiencyScore: issue.diagnostics?.inefficiencyScore || 0
+    procrastinationScore: diagnostics?.procrastinationScore || 0,
+    distractionScore: diagnostics?.distractionScore || 0,
+    lowFocusScore: diagnostics?.lowFocusScore || 0,
+    inefficiencyScore: diagnostics?.inefficiencyScore || 0,
+    focusScore: diagnostics?.focusScore || priorFocus,
+    focusImprovementPct: 0
   };
 }
 
@@ -460,7 +493,7 @@ function canEmitIntervention(session, issueType) {
   }
 
   const unresolvedIntervention = session.interventions.some(
-    (entry) => !entry.userAction && now - entry.ts < 4 * 60 * 1000
+    (entry) => !entry.userAction && now - entry.ts < 3 * 60 * 1000
   );
   if (unresolvedIntervention) {
     return false;
@@ -475,157 +508,35 @@ function canEmitIntervention(session, issueType) {
   return true;
 }
 
-function buildIntervention(issue, context) {
+function buildIntervention(issue, context, diagnostics) {
   const templates = {
-    coding: {
-      confusion: {
-        title: "Stuck While Coding",
-        message: "You look blocked. Want a targeted hint for the next step?",
-        nextAction: "Write one tiny test input, then solve only that case.",
-        fix: "Use smallest-case debugging: input -> expected output -> first failing line.",
-        hint: "Start with one edge case and prove it works before scaling up.",
-        refocus: "Do a 90-second single-tab sprint on only one bug.",
-        summary: "Summarize the bug, expected output, and next line to edit."
-      },
-      distraction: {
-        title: "Focus Drift During Coding",
-        message: "You switched context a lot. Want a 90-second focus sprint?",
-        nextAction: "Set one micro-goal: finish one function, then re-check.",
-        fix: "Keep one task tab and one reference tab open only.",
-        hint: "Complete one micro-goal before opening another tab.",
-        refocus: "Start a 90-second focus sprint with a single objective.",
-        summary: "Summarize your one coding objective for the next 90 seconds."
-      },
-      inefficiency: {
-        title: "Simpler Path Available",
-        message: "Your workflow looks repetitive. Want a faster strategy?",
-        nextAction: "Define one clear next action before editing more.",
-        fix: "State one target outcome, then implement directly.",
-        hint: "Optimize for one complete pass over multiple partial edits.",
-        refocus: "Pause for 20 seconds and commit to one planned step.",
-        summary: "Summarize your immediate next action."
-      }
+    procrastination: {
+      title: "Procrastination Pattern Detected",
+      what: "You switched contexts multiple times recently.",
+      why: "Frequent context switching often signals avoidance of the current task.",
+      nextAction: "Pick one concrete outcome and stay on it for 60 seconds."
     },
-    writing: {
-      confusion: {
-        title: "Clarity Dip Detected",
-        message: "This writing pass looks stuck. Want a clarity nudge?",
-        nextAction: "Rewrite one sentence with subject + action + outcome.",
-        fix: "Try the one-line thesis method before editing the full paragraph.",
-        hint: "Focus on one claim, then support it with one concrete detail.",
-        refocus: "Write two new sentences without editing.",
-        summary: "Summarize your paragraph intent in one sentence."
-      },
-      distraction: {
-        title: "Writing Focus Slipping",
-        message: "Frequent context switching detected. Resume with a quick anchor?",
-        nextAction: "Write the next 2 sentences without editing.",
-        fix: "Draft first, polish second. Keep momentum for 2 minutes.",
-        hint: "Momentum matters more than perfect phrasing during drafting.",
-        refocus: "Set a 2-minute no-edit sprint.",
-        summary: "Summarize what this paragraph should deliver."
-      },
-      inefficiency: {
-        title: "Revision Loop Detected",
-        message: "You are revising repeatedly. Want a cleaner workflow?",
-        nextAction: "Separate drafting and editing into two short passes.",
-        fix: "Run a 60-second draft sprint, then one 30-second edit sprint.",
-        hint: "Finish idea flow before polishing wording.",
-        refocus: "Switch to draft mode for one minute.",
-        summary: "Summarize your next draft pass objective."
-      }
+    distraction: {
+      title: "Distraction Detected",
+      what: "No activity was detected for a while.",
+      why: "Extended inactivity usually means attention drift.",
+      nextAction: "Run a short focus sprint or take a quick intentional break."
     },
-    studying: {
-      confusion: {
-        title: "Comprehension Check",
-        message: "This section may be unclear. Want a quick understanding check?",
-        nextAction: "Summarize the section in one sentence from memory.",
-        fix: "Use read -> close -> recall for one key idea right now.",
-        hint: "If recall is hard, re-read just the heading and first sentence.",
-        refocus: "Take 20 seconds and write one takeaway.",
-        summary: "Summarize what you just learned without looking."
-      },
-      distraction: {
-        title: "Attention Drift During Study",
-        message: "Attention is dropping. Want a short reset?",
-        nextAction: "Take 20 seconds, breathe, then capture one key takeaway.",
-        fix: "Write one bullet for what matters most before continuing.",
-        hint: "Define a single question this page should answer.",
-        refocus: "Run a 60-second focused recall sprint.",
-        summary: "Summarize your study objective for this block."
-      },
-      inefficiency: {
-        title: "Study Loop Detected",
-        message: "Progress is slow. Want a more efficient tactic?",
-        nextAction: "Switch to active recall for 60 seconds.",
-        fix: "Ask yourself one question and answer without looking at notes.",
-        hint: "Extraction beats passive rereading.",
-        refocus: "Pause and capture two concrete takeaways.",
-        summary: "Summarize one idea and one next step."
-      }
+    low_focus: {
+      title: "Low Focus Signal",
+      what: "Your activity slowed down with longer pauses.",
+      why: "Reduced momentum can indicate cognitive fatigue.",
+      nextAction: "Reset with one small next action and execute immediately."
     },
-    watching: {
-      confusion: {
-        title: "Passive Watching Detected",
-        message: "Want to lock in this content with a quick checkpoint?",
-        nextAction: "Pause and write one sentence about the last 2 minutes.",
-        fix: "Set a pause-every-key-idea rule for better retention.",
-        hint: "Checkpoint once per concept, not at random moments.",
-        refocus: "Commit to 3 focused minutes or intentionally switch tasks.",
-        summary: "Summarize the last two minutes in one line."
-      },
-      distraction: {
-        title: "Viewing Focus Drift",
-        message: "You are switching often. Continue or change task intentionally?",
-        nextAction: "Choose: finish 3 more minutes or switch with purpose.",
-        fix: "Intentional switch beats accidental scrolling. Choose one path now.",
-        hint: "Make a binary decision: continue this or close it.",
-        refocus: "Set a 3-minute timer and stay on this page.",
-        summary: "Summarize why this content matters right now."
-      },
-      inefficiency: {
-        title: "Low-Return Consumption",
-        message: "You may be consuming without extraction. Want a faster loop?",
-        nextAction: "Capture 2 takeaways before continuing.",
-        fix: "Takeaways convert passive content into usable knowledge.",
-        hint: "Ask what you will do differently after this video.",
-        refocus: "Pause and write one action item.",
-        summary: "Summarize one actionable takeaway."
-      }
-    },
-    reading: {
-      confusion: {
-        title: "Reading Friction Spotted",
-        message: "You might be rereading. Want a quick comprehension move?",
-        nextAction: "Paraphrase this section in one sentence.",
-        fix: "If paraphrasing is hard, reread only the heading and first sentence.",
-        hint: "Focus on the main claim, not every detail first.",
-        refocus: "Set one question this page should answer.",
-        summary: "Summarize the key idea in plain language."
-      },
-      distraction: {
-        title: "Browsing Drift Detected",
-        message: "Scrolling and switching increased. Re-anchor now?",
-        nextAction: "Define one question this page should answer.",
-        fix: "Question-led reading keeps browsing purposeful.",
-        hint: "Keep one objective visible while browsing.",
-        refocus: "Do a 60-second objective-first pass.",
-        summary: "Summarize why this page matters to your goal."
-      },
-      inefficiency: {
-        title: "Low Progress Pattern",
-        message: "You may be reading without extracting value. Want a tactical reset?",
-        nextAction: "Write one key point and one next action.",
-        fix: "Use 1 insight + 1 action per page for faster outcomes.",
-        hint: "Turn each page into one concrete decision.",
-        refocus: "Pause and capture one insight now.",
-        summary: "Summarize one insight and one next action."
-      }
+    inefficiency: {
+      title: "Inefficiency Pattern",
+      what: "You are repeating actions without clear progress.",
+      why: "Repetition without outcomes wastes effort and time.",
+      nextAction: "Change strategy and target a measurable next result."
     }
   };
 
-  const byActivity = templates[context.activityType] || templates.reading;
-  const pick = byActivity[issue.type] || templates.reading[issue.type] || templates.reading.confusion;
+  const pick = templates[issue.type] || templates.low_focus;
 
   return {
     id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -637,41 +548,70 @@ function buildIntervention(issue, context) {
     contextCategory: context.category,
     activityType: context.activityType,
     reason: issue.reason,
-    diagnostics: issue.diagnostics,
+    diagnostics,
     title: pick.title,
-    message: pick.message,
+    message: `${pick.what} ${pick.why}`,
+    what: pick.what,
+    why: pick.why,
     nextAction: pick.nextAction,
     actionPayloads: {
-      show_fix: pick.fix,
-      give_hint: pick.hint,
-      refocus: pick.refocus,
-      summarize: pick.summary
+      refocus_timer: "Start a 60-second single-task sprint and block all distractions.",
+      break_steps: "Break the task into 3 tiny steps and execute step one now.",
+      try_new_approach: "Use a different strategy and test one fresh approach.",
+      short_break: "Take a 90-second reset, then return with one clear objective.",
+      resume_task: "Resume now and finish one concrete outcome before switching."
     },
-    impactBefore: "~5 min likely wasted",
-    impactAfter: "~2 min after intervention"
+    impactBefore: "High drift risk detected",
+    impactAfter: "Focus can improve by ~40%"
   };
 }
 
-function simulateImprovement(session, issueType) {
+function simulateImprovement(session, issueType, action) {
   const next = { ...(session.lastSignal || {}) };
 
-  if (!issueType || !next.issueType) {
-    return;
-  }
+  const improvements = {
+    refocus_timer: 40,
+    break_steps: 25,
+    try_new_approach: 22,
+    short_break: 18,
+    resume_task: 20
+  };
 
-  next.confusionScore = Number(Math.max(0, (next.confusionScore || 0) - 0.2).toFixed(2));
-  next.distractionScore = Number(Math.max(0, (next.distractionScore || 0) - 0.2).toFixed(2));
-  next.inefficiencyScore = Number(Math.max(0, (next.inefficiencyScore || 0) - 0.2).toFixed(2));
+  const scoreDrop = {
+    refocus_timer: 0.4,
+    break_steps: 0.25,
+    try_new_approach: 0.22,
+    short_break: 0.18,
+    resume_task: 0.2
+  };
 
-  if (
-    issueType === next.issueType &&
-    Math.max(next.confusionScore, next.distractionScore, next.inefficiencyScore) < 0.45
-  ) {
-    next.issueType = null;
-    next.issueSeverity = null;
+  const pct = improvements[action] || 0;
+  const drop = scoreDrop[action] || 0;
+
+  next.procrastinationScore = Number(Math.max(0, (next.procrastinationScore || 0) - drop).toFixed(2));
+  next.distractionScore = Number(Math.max(0, (next.distractionScore || 0) - drop).toFixed(2));
+  next.lowFocusScore = Number(Math.max(0, (next.lowFocusScore || 0) - drop).toFixed(2));
+  next.inefficiencyScore = Number(Math.max(0, (next.inefficiencyScore || 0) - drop).toFixed(2));
+
+  next.focusScore = Math.min(100, Math.round((next.focusScore || 65) + pct));
+  next.focusImprovementPct = pct;
+
+  const maxScore = Math.max(
+    next.procrastinationScore || 0,
+    next.distractionScore || 0,
+    next.lowFocusScore || 0,
+    next.inefficiencyScore || 0
+  );
+
+  if (!issueType || issueType === next.issueType) {
+    if (maxScore < 0.45) {
+      next.issueType = null;
+      next.issueSeverity = null;
+    }
   }
 
   session.lastSignal = next;
+  return pct;
 }
 
 function bumpIssueCounters(session, issueType) {
@@ -687,7 +627,7 @@ function addTimeline(session, eventType, label, details) {
     details
   });
 
-  session.timeline = session.timeline.slice(0, 40);
+  session.timeline = session.timeline.slice(0, 50);
 }
 
 async function persistState(tabId, session) {
@@ -705,7 +645,8 @@ async function persistState(tabId, session) {
       lastSignal: session.lastSignal,
       lastMetrics: session.lastMetrics,
       interventions: session.interventions,
-      timeline: session.timeline
+      timeline: session.timeline,
+      liveResultsUrl: LIVE_RESULTS_URL
     },
     nudge_last_tab: tabId,
     nudge_last_update: Date.now()
@@ -720,6 +661,10 @@ function severityFromScore(score) {
     return "medium";
   }
   return "low";
+}
+
+function humanizeIssue(issueType) {
+  return String(issueType || "issue").replaceAll("_", " ");
 }
 
 function domainFromUrl(url) {
@@ -740,34 +685,37 @@ function includesAny(text, tokens) {
 
 function actionLabel(action) {
   const labels = {
-    show_fix: "Show Fix",
-    give_hint: "Give Hint",
-    refocus: "Refocus",
-    summarize: "Summarize"
+    refocus_timer: "Refocus (Start 60s timer)",
+    break_steps: "Break into Steps",
+    try_new_approach: "Try New Approach",
+    short_break: "Take Short Break",
+    resume_task: "Resume Task"
   };
-  return labels[action] || "Refocus";
+  return labels[action] || "Resume Task";
 }
 
 function normalizeAction(action) {
   const mapping = {
-    show_suggestion: "show_fix",
-    try_action: "refocus",
-    ignore: "summarize"
+    show_suggestion: "break_steps",
+    try_action: "resume_task",
+    ignore: "short_break",
+    show_fix: "break_steps",
+    give_hint: "try_new_approach",
+    refocus: "refocus_timer",
+    summarize: "resume_task"
   };
 
   const resolved = mapping[action] || action;
-  if (["show_fix", "give_hint", "refocus", "summarize"].includes(resolved)) {
+  if (["refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task"].includes(resolved)) {
     return resolved;
   }
-  return "refocus";
+
+  return "resume_task";
 }
 
 function numberOrZero(value) {
   const numeric = Number(value);
-  if (Number.isFinite(numeric)) {
-    return numeric;
-  }
-  return 0;
+  return Number.isFinite(numeric) ? numeric : 0;
 }
 
 function clamp(value) {
@@ -775,11 +723,4 @@ function clamp(value) {
     return 0;
   }
   return Math.min(1, Math.max(0, value));
-}
-
-function capitalize(value) {
-  if (!value) {
-    return "";
-  }
-  return `${value[0].toUpperCase()}${value.slice(1)}`;
 }

@@ -84,8 +84,8 @@ function DashboardPage() {
     <main className="page-shell">
       <header className="topbar">
         <div>
-          <h1>DecisionOS Report</h1>
-          <p>Context behavior analytics for {summary.learnerName}</p>
+          <h1>Nudge Live Results</h1>
+          <p>Behavior intervention analytics for {summary.learnerName}</p>
         </div>
         <Link to="/" className="btn btn-primary">
           Start New Session
@@ -146,8 +146,8 @@ function DashboardPage() {
               <div className="list-item" key={item.id}>
                 <strong>{item.title}</strong>
                 <span>{item.message}</span>
-                <span>Action: {item.userAction || "none"}</span>
-                <span>Severity: {item.severity}</span>
+                <span>Action: {formatToken(item.userAction || "none")}</span>
+                <span>Severity: {formatToken(item.severity || "low")}</span>
               </div>
             ))}
           </div>
@@ -159,7 +159,7 @@ function DashboardPage() {
             {summary.timeline.length === 0 ? <p>No timeline events.</p> : null}
             {summary.timeline.slice(0, 10).map((event) => (
               <div className="list-item" key={event.id}>
-                <strong>{event.eventType}</strong>
+                <strong>{formatToken(event.eventType)}</strong>
                 <span>{event.label}</span>
                 <span>{new Date(event.ts).toLocaleTimeString()}</span>
               </div>
@@ -197,6 +197,10 @@ function formatDuration(durationMs) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${seconds}s`;
+}
+
+function formatToken(value) {
+  return String(value || "n/a").replaceAll("_", " ");
 }
 
 export default DashboardPage;

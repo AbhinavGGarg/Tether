@@ -19,7 +19,7 @@ app.use(cors({ origin: clientOrigin === "*" ? true : clientOrigin }));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "DecisionOS backend", version: "3.0.0" });
+  res.json({ ok: true, service: "Nudge backend", version: "3.0.0" });
 });
 
 app.get("/api/context/profiles", (_req, res) => {
@@ -141,5 +141,5 @@ app.get("/api/session/:sessionId/summary", (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`DecisionOS backend running at http://localhost:${port}`);
+  console.log(`Nudge backend running at http://localhost:${port}`);
 });

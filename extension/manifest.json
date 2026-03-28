@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "DecisionOS Context Copilot",
+  "name": "Nudge Live Copilot",
   "version": "0.2.0",
-  "description": "Context-aware real-time intervention overlay for live decision support across websites.",
+  "description": "Nudge real-time behavioral intervention overlay across websites.",
   "permissions": ["storage", "tabs", "activeTab"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background.js"
   },
   "action": {
-    "default_title": "DecisionOS",
+    "default_title": "Nudge",
     "default_popup": "src/popup.html"
   },
   "content_scripts": [
