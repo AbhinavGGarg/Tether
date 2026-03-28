@@ -80,8 +80,8 @@ function WorkspacePage() {
 
       if (list[0]) {
         setSelectedProblemId(list[0].id);
-        setAnswer(list[0].starterCode || "");
-        currentTextRef.current = list[0].starterCode || "";
+        setAnswer("");
+        currentTextRef.current = "";
       }
     }
 
@@ -159,9 +159,9 @@ function WorkspacePage() {
       return;
     }
 
-    setAnswer(selectedProblem.starterCode || "");
+    setAnswer("");
     setAttemptResult(null);
-    currentTextRef.current = selectedProblem.starterCode || "";
+    currentTextRef.current = "";
     problemStartRef.current = Date.now();
     lastInputRef.current = Date.now();
     keyEventsRef.current = [];
@@ -298,6 +298,7 @@ function WorkspacePage() {
             onChange={handleAnswerChange}
             onKeyDown={handleKeyDown}
             spellCheck={false}
+            placeholder="// Write your solution here\n// The system monitors your process and gives live interventions"
           />
 
           <div className="action-row">
