@@ -24,9 +24,12 @@ const DEFAULT_MASTERY = {
 function WorkspacePage() {
   const navigate = useNavigate();
 
-  const [learnerName, setLearnerName] = useState("Ava Chen");
+  const [learnerName, setLearnerName] = useState("");
+  const [learnerDraft, setLearnerDraft] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [connected, setConnected] = useState(!isRemoteMode());
+  const [startingSession, setStartingSession] = useState(false);
+  const [startError, setStartError] = useState("");
   const [problems, setProblems] = useState([]);
   const [selectedProblemId, setSelectedProblemId] = useState("");
   const [answer, setAnswer] = useState("");
@@ -62,11 +65,8 @@ function WorkspacePage() {
   useEffect(() => {
     let cancelled = false;
 
-    async function boot() {
-      const [problemResponse, sessionResponse] = await Promise.all([
-        fetchProblems(),
-        startSession(learnerName || "Demo Student")
-      ]);
+    async function loadProblems() {
+      const problemResponse = await fetchProblems();
 
       if (cancelled) {
         return;
@@ -74,9 +74,6 @@ function WorkspacePage() {
 
       const list = problemResponse?.problems || [];
       setProblems(list);
-      setSessionId(sessionResponse.sessionId);
-      sessionStartRef.current = Date.now();
-      setConnected(true);
 
       if (list[0]) {
         setSelectedProblemId(list[0].id);
@@ -85,7 +82,7 @@ function WorkspacePage() {
       }
     }
 
-    boot().catch((error) => {
+    loadProblems().catch((error) => {
       console.error(error);
     });
 
@@ -93,6 +90,29 @@ function WorkspacePage() {
       cancelled = true;
     };
   }, []);
+
+  async function handleCreateSession() {
+    const cleanName = learnerDraft.trim();
+    if (!cleanName) {
+      setStartError("Enter a learner name to begin.");
+      return;
+    }
+
+    setStartingSession(true);
+    setStartError("");
+
+    try {
+      const sessionResponse = await startSession(cleanName);
+      setSessionId(sessionResponse.sessionId);
+      setLearnerName(cleanName);
+      sessionStartRef.current = Date.now();
+      setConnected(true);
+    } catch (error) {
+      setStartError("Could not start session. Try again.");
+    } finally {
+      setStartingSession(false);
+    }
+  }
 
   useEffect(() => {
     if (!sessionId || !selectedProblemId) {
@@ -257,102 +277,126 @@ function WorkspacePage() {
             <input value={learnerName} onChange={(event) => setLearnerName(event.target.value)} />
           </label>
           <span className={`status-pill ${connected ? "online" : "offline"}`}>
-            {connected ? "Live Monitoring" : "Starting"}
+            {connected ? "Live Monitoring" : "Session not started"}
           </span>
+          {learnerName ? <span className="status-pill online">Learner: {learnerName}</span> : null}
           <button className="btn btn-primary" onClick={goToDashboard}>
             End Session + Dashboard
           </button>
         </div>
       </header>
 
-      <section className="workspace-grid">
-        <article className="panel panel-main">
-          <div className="problem-tabs">
-            {problems.map((problem) => (
-              <button
-                key={problem.id}
-                className={`problem-chip ${problem.id === selectedProblemId ? "active" : ""}`}
-                onClick={() => setSelectedProblemId(problem.id)}
-              >
-                <span>{problem.title}</span>
-                <small>{problem.difficulty}</small>
-              </button>
-            ))}
-          </div>
-
-          <textarea
-            className="code-editor"
-            value={answer}
-            onChange={handleAnswerChange}
-            onKeyDown={handleKeyDown}
-            spellCheck={false}
-          />
-
+      {!sessionId ? (
+        <section className="panel">
+          <h3>Create Learner Session</h3>
+          <p>Enter learner name to start monitoring and interventions.</p>
           <div className="action-row">
-            <button className="btn btn-primary" onClick={handleSubmitAttempt}>
-              Check Attempt
+            <input
+              value={learnerDraft}
+              onChange={(event) => setLearnerDraft(event.target.value)}
+              placeholder="Learner name"
+              className="session-input"
+            />
+            <button className="btn btn-primary" onClick={handleCreateSession} disabled={startingSession}>
+              {startingSession ? "Starting..." : "Start Session"}
             </button>
-            {attemptResult ? (
-              <span className={`attempt-badge ${attemptResult.isCorrect ? "good" : "warn"}`}>
-                {attemptResult.isCorrect ? "Correct path" : "Needs revision"}: {attemptResult.feedback}
-              </span>
-            ) : null}
           </div>
-        </article>
+          {startError ? <p className="start-error">{startError}</p> : null}
+        </section>
+      ) : null}
 
-        <aside className="panel panel-side">
-          <h3>Live Detection Feed</h3>
-          <div className="metric-grid">
-            <Metric label="Typing speed" value={`${telemetry.typingSpeed} keys/s`} />
-            <Metric label="Pause" value={`${Math.round(telemetry.pauseDurationMs / 1000)}s`} />
-            <Metric label="Repeated edits" value={telemetry.repeatedEdits} />
-            <Metric label="Deletion rate" value={telemetry.deletionRate} />
-            <Metric label="Complexity score" value={telemetry.complexityScore} />
-            <Metric label="Total keystrokes" value={telemetry.totalKeystrokes} />
-          </div>
-
-          <div className="signal-box">
-            <h4>Current issue signal</h4>
-            <p>
-              {signal.issueType ? `${signal.issueType} (${signal.issueSeverity})` : "No active issue"}
-            </p>
-            <div className="progress-track">
-              <span style={{ width: `${Math.min(100, Math.round(signal.confusionScore * 100))}%` }} />
+      {sessionId ? (
+        <section className="workspace-grid">
+          <article className="panel panel-main">
+            <div className="problem-tabs">
+              {problems.map((problem) => (
+                <button
+                  key={problem.id}
+                  className={`problem-chip ${problem.id === selectedProblemId ? "active" : ""}`}
+                  onClick={() => setSelectedProblemId(problem.id)}
+                >
+                  <span>{problem.title}</span>
+                  <small>{problem.difficulty}</small>
+                </button>
+              ))}
             </div>
-          </div>
 
-          <div className="mastery-box">
-            <h4>Concept mastery</h4>
-            {Object.entries(masteryMap).map(([concept, mastery]) => (
-              <div className="mastery-row" key={concept}>
-                <span>{concept}</span>
-                <div className="progress-track">
-                  <span style={{ width: `${Math.round(mastery * 100)}%` }} />
+            <textarea
+              className="code-editor"
+              value={answer}
+              onChange={handleAnswerChange}
+              onKeyDown={handleKeyDown}
+              spellCheck={false}
+            />
+
+            <div className="action-row">
+              <button className="btn btn-primary" onClick={handleSubmitAttempt}>
+                Check Attempt
+              </button>
+              {attemptResult ? (
+                <span className={`attempt-badge ${attemptResult.isCorrect ? "good" : "warn"}`}>
+                  {attemptResult.isCorrect ? "Correct path" : "Needs revision"}: {attemptResult.feedback}
+                </span>
+              ) : null}
+            </div>
+          </article>
+
+          <aside className="panel panel-side">
+            <h3>Live Detection Feed</h3>
+            <div className="metric-grid">
+              <Metric label="Typing speed" value={`${telemetry.typingSpeed} keys/s`} />
+              <Metric label="Pause" value={`${Math.round(telemetry.pauseDurationMs / 1000)}s`} />
+              <Metric label="Repeated edits" value={telemetry.repeatedEdits} />
+              <Metric label="Deletion rate" value={telemetry.deletionRate} />
+              <Metric label="Complexity score" value={telemetry.complexityScore} />
+              <Metric label="Total keystrokes" value={telemetry.totalKeystrokes} />
+            </div>
+
+            <div className="signal-box">
+              <h4>Current issue signal</h4>
+              <p>
+                {signal.issueType ? `${signal.issueType} (${signal.issueSeverity})` : "No active issue"}
+              </p>
+              <div className="progress-track">
+                <span style={{ width: `${Math.min(100, Math.round(signal.confusionScore * 100))}%` }} />
+              </div>
+            </div>
+
+            <div className="mastery-box">
+              <h4>Concept mastery</h4>
+              {Object.entries(masteryMap).map(([concept, mastery]) => (
+                <div className="mastery-row" key={concept}>
+                  <span>{concept}</span>
+                  <div className="progress-track">
+                    <span style={{ width: `${Math.round(mastery * 100)}%` }} />
+                  </div>
+                  <strong>{Math.round(mastery * 100)}%</strong>
                 </div>
-                <strong>{Math.round(mastery * 100)}%</strong>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          <div className="timeline-box">
-            <h4>Intervention timeline</h4>
-            {interventionHistory.length === 0 ? <p>No interventions yet.</p> : null}
-            {interventionHistory.map((item) => (
-              <div key={item.id} className="timeline-item">
-                <span>{item.type}</span>
-                <p>{item.message}</p>
-              </div>
-            ))}
-          </div>
-        </aside>
-      </section>
+            <div className="timeline-box">
+              <h4>Intervention timeline</h4>
+              {interventionHistory.length === 0 ? <p>No interventions yet.</p> : null}
+              {interventionHistory.map((item) => (
+                <div key={item.id} className="timeline-item">
+                  <span>{item.type}</span>
+                  <p>{item.message}</p>
+                </div>
+              ))}
+            </div>
+          </aside>
+        </section>
+      ) : null}
 
-      <FloatingAssistant intervention={activeIntervention || interventionHistory[0]} />
-      <InterventionPopup
-        intervention={activeIntervention}
-        onApply={applyIntervention}
-        onDismiss={dismissIntervention}
-      />
+      {sessionId ? <FloatingAssistant intervention={activeIntervention || interventionHistory[0]} /> : null}
+      {sessionId ? (
+        <InterventionPopup
+          intervention={activeIntervention}
+          onApply={applyIntervention}
+          onDismiss={dismissIntervention}
+        />
+      ) : null}
     </main>
   );
 }
