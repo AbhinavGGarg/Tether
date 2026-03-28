@@ -437,6 +437,10 @@ function detectIssue(session, metrics, context) {
     tabSwitchesDelta: metrics.tabSwitchesDelta
   };
 
+  if (!metrics.isPageActive) {
+    return { issue: null, diagnostics: baseDiagnostics };
+  }
+
   const pauseFactor = clamp(metrics.pauseDurationMs / 22000);
   const idleFactor = clamp(metrics.idleDurationMs / 45000);
   const tabFactor = clamp(metrics.tabSwitchesDelta / 3);

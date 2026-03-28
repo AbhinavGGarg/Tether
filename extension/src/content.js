@@ -182,6 +182,16 @@ function checkInactivity() {
     return;
   }
 
+  if (!isCurrentPageActive()) {
+    // Pause inactivity tracking while this tab is not active/focused.
+    const now = Date.now();
+    lastActivityTime = now;
+    lastInteractionAt = now;
+    hidePopup();
+    renderDock();
+    return;
+  }
+
   const idleMs = Date.now() - lastActivityTime;
   const inactivityThresholdMs = getInactivityThresholdMs();
   if (!issueActive && idleMs >= inactivityThresholdMs) {
@@ -588,6 +598,10 @@ function resetForPageChange(nextPageKey) {
 
 function getInactivityThresholdMs() {
   return interruptionStats.lostFocusCount >= 1 ? SECONDARY_INACTIVITY_MS : STRICT_INACTIVITY_MS;
+}
+
+function isCurrentPageActive() {
+  return document.visibilityState === "visible" && document.hasFocus();
 }
 
 function registerInterruptionStop() {
