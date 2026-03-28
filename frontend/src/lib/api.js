@@ -2,19 +2,23 @@ const API_BASE = import.meta.env.VITE_API_BASE || "";
 const REMOTE_MODE = Boolean(API_BASE);
 
 const LOCAL_SESSION_PREFIX = "nudge:context-session:";
+const STRICT_INACTIVITY_MS = 90 * 1000;
 
 const ISSUE_COOLDOWN_MS = {
   procrastination: 90000,
   distraction: 80000,
+  distraction_inactivity: 90000,
   low_focus: 100000,
   inefficiency: 110000
 };
 
 const ACTION_SNOOZE_MS = {
+  lock_in_2m: 180000,
   refocus_timer: 180000,
   break_steps: 90000,
   try_new_approach: 90000,
   short_break: 120000,
+  ignore: 180000,
   resume_task: 60000
 };
 
@@ -98,6 +102,7 @@ function recordMetrics(sessionId, rawMetrics) {
   session.metricsHistory = session.metricsHistory.slice(-200);
 
   ingestMetrics(session, metrics);
+  processIgnoredReminderFollowUp(session, metrics);
 
   const detection = detectIssue(session, metrics, context);
   const issue = detection.issue;
@@ -108,11 +113,22 @@ function recordMetrics(sessionId, rawMetrics) {
     session.issueCounters[issue.type] = (session.issueCounters[issue.type] || 0) + 1;
     addTimeline(session, "issue_detected", `${humanizeIssue(issue.type)} detected`, issue.reason);
 
-    if (canEmitIntervention(session, issue.type)) {
+    if (canEmitIntervention(session, issue)) {
       intervention = buildIntervention(issue, context, detection.diagnostics);
       session.interventions.unshift(intervention);
       session.interventions = session.interventions.slice(0, 20);
+      session.pendingIgnoredReminder = null;
       addTimeline(session, "intervention_triggered", intervention.title, intervention.what);
+
+      if (intervention.strategy === "inactivity_strict") {
+        dispatchBrowserNotification("Nudge Alert", "You stopped working. Get back in for 2 minutes.");
+        addTimeline(
+          session,
+          "reminder_sent",
+          "Reminder sent: Resume session",
+          "Inactivity reminder notification triggered."
+        );
+      }
     }
   }
 
@@ -151,10 +167,11 @@ function markInterventionApplied(sessionId, interventionId, action = "resume_tas
   const safeAction = normalizeAction(action);
   target.userAction = safeAction;
   target.respondedAt = Date.now();
-  target.applied = true;
+  target.applied = ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(safeAction);
 
-  if (ACTION_SNOOZE_MS[safeAction] && target.type) {
-    session.snoozedByType[target.type] = Date.now() + ACTION_SNOOZE_MS[safeAction];
+  const snoozeKey = target.strategy === "inactivity_strict" ? "distraction_inactivity" : target.type;
+  if (ACTION_SNOOZE_MS[safeAction] && snoozeKey) {
+    session.snoozedByType[snoozeKey] = Date.now() + ACTION_SNOOZE_MS[safeAction];
   }
 
   const improvementPct = simulateImprovement(session, target.type, safeAction);
@@ -169,8 +186,33 @@ function markInterventionApplied(sessionId, interventionId, action = "resume_tas
     `${humanizeIssue(target.type)} intervention`
   );
 
+  if (safeAction === "lock_in_2m") {
+    addTimeline(session, "focus_timer_started", "User started 2-minute lock-in", "120-second focus sprint started");
+    session.pendingIgnoredReminder = null;
+    session.inactivityReminderStopped = false;
+  }
+
   if (safeAction === "refocus_timer") {
     addTimeline(session, "focus_timer_started", "User started focus timer", "60-second refocus sprint started");
+  }
+
+  if (safeAction === "ignore" && target.strategy === "inactivity_strict") {
+    session.pendingIgnoredReminder = {
+      interventionId: target.id,
+      dueAt: Date.now() + 3 * 60 * 1000
+    };
+    session.inactivityReminderStopped = false;
+    addTimeline(
+      session,
+      "user_ignored",
+      "User ignored reminder",
+      "Follow-up reminder scheduled in 3 minutes."
+    );
+  }
+
+  if (safeAction === "resume_task") {
+    session.pendingIgnoredReminder = null;
+    session.inactivityReminderStopped = false;
   }
 
   if (improvementPct > 0) {
@@ -260,7 +302,9 @@ function createSessionObject(sessionId, learnerName, startedAt) {
       scrollSpeed: 0,
       tabSwitchesDelta: 0,
       totalKeystrokes: 0
-    }
+    },
+    pendingIgnoredReminder: null,
+    inactivityReminderStopped: false
   };
 }
 
@@ -369,10 +413,6 @@ function detectIssue(session, metrics, context) {
     tabSwitchesDelta: metrics.tabSwitchesDelta
   };
 
-  if (context.activityType === "none_detected") {
-    return { issue: null, diagnostics: baseDiagnostics };
-  }
-
   const pauseFactor = clamp(metrics.pauseDurationMs / 22000);
   const idleFactor = clamp(metrics.idleDurationMs / 45000);
   const repeatFactor = clamp(metrics.repeatedActions / 8);
@@ -407,13 +447,51 @@ function detectIssue(session, metrics, context) {
     tabSwitchesDelta: metrics.tabSwitchesDelta
   };
 
-  if (metrics.idleDurationMs > 45000) {
+  const inactivityStrict =
+    metrics.pauseDurationMs >= STRICT_INACTIVITY_MS &&
+    metrics.idleDurationMs >= STRICT_INACTIVITY_MS &&
+    metrics.keystrokesDelta === 0 &&
+    metrics.scrollDistance === 0 &&
+    metrics.tabSwitchesDelta === 0;
+
+  if (inactivityStrict) {
+    diagnostics.distractionScore = Math.max(diagnostics.distractionScore, 0.92);
+    diagnostics.focusScore = Math.min(diagnostics.focusScore, 28);
+
     return {
       issue: {
         type: "distraction",
+        strategy: "inactivity_strict",
+        displayType: "Distraction / Inactivity",
+        score: Number(diagnostics.distractionScore.toFixed(2)),
+        severity: "high",
+        reason: "You’ve been inactive for over a minute. You may be losing focus."
+      },
+      diagnostics
+    };
+  }
+
+  if (context.activityType === "none_detected") {
+    return { issue: null, diagnostics };
+  }
+
+  const noFreshActivity =
+    metrics.keystrokesDelta === 0 &&
+    metrics.scrollDistance === 0 &&
+    metrics.tabSwitchesDelta === 0;
+
+  if (noFreshActivity && metrics.idleDurationMs < STRICT_INACTIVITY_MS) {
+    return { issue: null, diagnostics };
+  }
+
+  if (metrics.idleDurationMs > STRICT_INACTIVITY_MS) {
+    return {
+      issue: {
+        type: "distraction",
+        displayType: "Distraction",
         score: diagnostics.distractionScore,
         severity: severityFromScore(diagnostics.distractionScore),
-        reason: "No activity detected. Are you still working?"
+        reason: "No activity detected for an extended stretch."
       },
       diagnostics
     };
@@ -465,6 +543,7 @@ function detectIssue(session, metrics, context) {
   return {
     issue: {
       type: top.type,
+      displayType: humanizeIssue(top.type),
       severity: severityFromScore(top.score),
       score: Number(top.score.toFixed(2)),
       reason: top.reason,
@@ -480,7 +559,9 @@ function buildSignal(issue, diagnostics, previousSignal = null) {
   if (!issue) {
     return {
       issueType: null,
+      issueDisplayType: null,
       issueSeverity: null,
+      statusLabel: "Live monitoring",
       procrastinationScore: diagnostics?.procrastinationScore || 0,
       distractionScore: diagnostics?.distractionScore || 0,
       lowFocusScore: diagnostics?.lowFocusScore || 0,
@@ -492,7 +573,9 @@ function buildSignal(issue, diagnostics, previousSignal = null) {
 
   return {
     issueType: issue.type,
+    issueDisplayType: issue.displayType || humanizeIssue(issue.type),
     issueSeverity: issue.severity,
+    statusLabel: issue.type === "distraction" ? "Distraction detected" : `${humanizeIssue(issue.type)} detected`,
     procrastinationScore: diagnostics?.procrastinationScore || 0,
     distractionScore: diagnostics?.distractionScore || 0,
     lowFocusScore: diagnostics?.lowFocusScore || 0,
@@ -502,10 +585,18 @@ function buildSignal(issue, diagnostics, previousSignal = null) {
   };
 }
 
-function canEmitIntervention(session, issueType) {
+function canEmitIntervention(session, issue) {
+  if (!issue?.type) {
+    return false;
+  }
+
+  const issueKey = issue.strategy === "inactivity_strict" ? "distraction_inactivity" : issue.type;
+  if (issue.strategy === "inactivity_strict" && session.inactivityReminderStopped) {
+    return false;
+  }
   const now = Date.now();
 
-  if ((session.snoozedByType[issueType] || 0) > now) {
+  if ((session.snoozedByType[issueKey] || 0) > now) {
     return false;
   }
 
@@ -514,16 +605,45 @@ function canEmitIntervention(session, issueType) {
     return false;
   }
 
-  const lastTs = session.lastInterventionByType[issueType] || 0;
-  if (now - lastTs < (ISSUE_COOLDOWN_MS[issueType] || 90000)) {
+  const lastTs = session.lastInterventionByType[issueKey] || 0;
+  if (now - lastTs < (ISSUE_COOLDOWN_MS[issueKey] || 90000)) {
     return false;
   }
 
-  session.lastInterventionByType[issueType] = now;
+  session.lastInterventionByType[issueKey] = now;
   return true;
 }
 
 function buildIntervention(issue, context, diagnostics) {
+  if (issue.strategy === "inactivity_strict") {
+    return {
+      id: createSessionId(),
+      ts: Date.now(),
+      applied: false,
+      userAction: null,
+      type: issue.type,
+      strategy: issue.strategy,
+      severity: issue.severity,
+      contextCategory: context.category,
+      activityType: context.activityType,
+      reason: issue.reason,
+      diagnostics,
+      title: "Distraction / Inactivity",
+      message: "You’ve been inactive for over a minute. You may be losing focus.",
+      what: "You’ve been inactive for over a minute. You may be losing focus.",
+      why: "No typing, interaction, or activity was detected for 90 seconds.",
+      nextAction: "Lock back in for 2 minutes to regain momentum.",
+      actions: ["lock_in_2m", "resume_task", "ignore"],
+      actionPayloads: {
+        lock_in_2m: "Start a 2-minute focus sprint and avoid switching tasks.",
+        resume_task: "Resume your current task now and complete one concrete step.",
+        ignore: "No action taken. A follow-up reminder will arrive in 3 minutes."
+      },
+      impactBefore: "Risk increased due to inactivity.",
+      impactAfter: "Focus can improve by ~40%"
+    };
+  }
+
   const templates = {
     procrastination: {
       title: "Procrastination Pattern Detected",
@@ -569,7 +689,9 @@ function buildIntervention(issue, context, diagnostics) {
     what: pick.what,
     why: pick.why,
     nextAction: pick.nextAction,
+    actions: ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task"],
     actionPayloads: {
+      lock_in_2m: "Start a 2-minute focus sprint and avoid switching tasks.",
       refocus_timer: "Start a 60-second single-task sprint and block all distractions.",
       break_steps: "Break the task into 3 tiny steps and execute step one now.",
       try_new_approach: "Use a different strategy and test one fresh approach.",
@@ -585,6 +707,7 @@ function simulateImprovement(session, issueType, action) {
   const next = { ...(session.lastSignal || {}) };
 
   const improvements = {
+    lock_in_2m: 40,
     refocus_timer: 40,
     break_steps: 25,
     try_new_approach: 22,
@@ -593,6 +716,7 @@ function simulateImprovement(session, issueType, action) {
   };
 
   const scoreDrop = {
+    lock_in_2m: 0.4,
     refocus_timer: 0.4,
     break_steps: 0.25,
     try_new_approach: 0.22,
@@ -621,7 +745,9 @@ function simulateImprovement(session, issueType, action) {
   if (!issueType || issueType === next.issueType) {
     if (maxScore < 0.45) {
       next.issueType = null;
+      next.issueDisplayType = null;
       next.issueSeverity = null;
+      next.statusLabel = "Live monitoring";
     }
   }
 
@@ -661,7 +787,7 @@ function localFetchSummary(sessionId) {
     .slice(0, 6);
 
   const successfulActions = session.interventions.filter((entry) =>
-    ["refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(entry.userAction)
+    ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(entry.userAction)
   ).length;
 
   const interventionEffectiveness = session.interventions.length
@@ -740,7 +866,7 @@ function buildImprovementSuggestions(session, contextBreakdown) {
   }
 
   if ((session.issueCounters.distraction || 0) > 0) {
-    suggestions.push("When inactivity appears, run a 60-second refocus timer immediately.");
+    suggestions.push("When inactivity appears, run a 2-minute lock-in sprint immediately.");
   }
 
   if ((session.issueCounters.low_focus || 0) > 0) {
@@ -773,7 +899,9 @@ function addTimeline(session, eventType, label, details) {
 function emptySignal() {
   return {
     issueType: null,
+    issueDisplayType: null,
     issueSeverity: null,
+    statusLabel: "Live monitoring",
     procrastinationScore: 0,
     distractionScore: 0,
     lowFocusScore: 0,
@@ -808,7 +936,7 @@ function normalizeAction(action) {
   const mapping = {
     show_suggestion: "break_steps",
     try_action: "resume_task",
-    ignore: "short_break",
+    ignore: "ignore",
     show_fix: "break_steps",
     give_hint: "try_new_approach",
     refocus: "refocus_timer",
@@ -816,7 +944,11 @@ function normalizeAction(action) {
   };
 
   const resolved = mapping[action] || action;
-  if (["refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task"].includes(resolved)) {
+  if (
+    ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task", "ignore"].includes(
+      resolved
+    )
+  ) {
     return resolved;
   }
 
@@ -825,11 +957,13 @@ function normalizeAction(action) {
 
 function actionLabel(action) {
   const labels = {
+    lock_in_2m: "Lock In (2 min focus)",
     refocus_timer: "Refocus (Start 60s timer)",
     break_steps: "Break into Steps",
     try_new_approach: "Try New Approach",
     short_break: "Take Short Break",
-    resume_task: "Resume Task"
+    resume_task: "Resume Task",
+    ignore: "Ignore"
   };
 
   return labels[action] || "Resume Task";
@@ -868,6 +1002,68 @@ function numberOrZero(value) {
     return numeric;
   }
   return 0;
+}
+
+function processIgnoredReminderFollowUp(session, metrics) {
+  const userReturned =
+    metrics.keystrokesDelta > 0 ||
+    metrics.scrollDistance > 0 ||
+    metrics.tabSwitchesDelta > 0 ||
+    metrics.idleDurationMs < 10000;
+
+  if (session.inactivityReminderStopped && userReturned) {
+    session.inactivityReminderStopped = false;
+    addTimeline(session, "user_returned", "User returned to task", "Inactivity reminder sequence reset.");
+  }
+
+  const pending = session.pendingIgnoredReminder;
+  if (!pending) {
+    return;
+  }
+
+  if (userReturned) {
+    addTimeline(session, "user_returned", "User returned to task", "Follow-up inactivity reminder canceled.");
+    session.pendingIgnoredReminder = null;
+    session.inactivityReminderStopped = false;
+    return;
+  }
+
+  if (Date.now() < pending.dueAt) {
+    return;
+  }
+
+  dispatchBrowserNotification("Nudge Alert", "You stopped working. Get back in for 2 minutes.");
+  addTimeline(
+    session,
+    "reminder_sent",
+    "Second reminder sent: Resume session",
+    "Inactivity was ignored for 3 minutes. This is the final reminder."
+  );
+
+  session.lastSignal = {
+    ...(session.lastSignal || {}),
+    issueType: "distraction",
+    issueDisplayType: "Distraction / Inactivity",
+    issueSeverity: "high",
+    statusLabel: "Distraction detected",
+    distractionScore: Math.max(session.lastSignal?.distractionScore || 0, 0.94),
+    focusScore: Math.min(session.lastSignal?.focusScore || 72, 28)
+  };
+
+  session.pendingIgnoredReminder = null;
+  session.inactivityReminderStopped = true;
+}
+
+function dispatchBrowserNotification(title, body) {
+  if (typeof window === "undefined" || typeof Notification === "undefined") {
+    return;
+  }
+
+  if (Notification.permission !== "granted") {
+    return;
+  }
+
+  new Notification(title, { body });
 }
 
 function createSessionId() {

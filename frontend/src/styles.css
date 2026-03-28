@@ -352,6 +352,21 @@ body {
   grid-column: 1 / -1;
 }
 
+.grade-slots-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grade-slot-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
 .risk-dashboard {
   margin-top: 12px;
   border: 1px solid var(--line);
@@ -511,162 +526,6 @@ body {
   font-size: 0.84rem;
 }
 
-.intervention-toast {
-  position: fixed;
-  right: 18px;
-  top: 18px;
-  width: min(390px, calc(100vw - 32px));
-  border-radius: 16px;
-  border: 1px solid rgba(249, 115, 22, 0.45);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 24px 54px rgba(15, 23, 42, 0.24);
-  padding: 14px;
-  z-index: 20;
-}
-
-.intervention-tag {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #9a3412;
-}
-
-.intervention-toast h3 {
-  margin: 7px 0 8px;
-}
-
-.intervention-toast p {
-  margin: 0;
-}
-
-.intervention-note {
-  margin-top: 10px;
-  padding: 9px;
-  border-radius: 10px;
-  background: rgba(2, 132, 199, 0.1);
-  font-size: 0.84rem;
-}
-
-.intervention-why {
-  display: grid;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.intervention-why p {
-  margin: 0;
-}
-
-.intervention-impact {
-  margin-top: 10px;
-  border-radius: 10px;
-  padding: 9px;
-  background: rgba(2, 132, 199, 0.1);
-  font-size: 0.84rem;
-}
-
-.intervention-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 11px;
-  flex-wrap: wrap;
-}
-
-.intervention-detail {
-  margin-top: 10px;
-  border-radius: 10px;
-  padding: 9px;
-  background: rgba(15, 23, 42, 0.08);
-  font-size: 0.84rem;
-  line-height: 1.45;
-}
-
-.floating-assistant {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  width: min(420px, calc(100vw - 32px));
-  border-radius: 16px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  background: rgba(2, 6, 23, 0.95);
-  color: #e2e8f0;
-  box-shadow: 0 24px 52px rgba(15, 23, 42, 0.24);
-}
-
-.floating-assistant.collapsed {
-  width: min(280px, calc(100vw - 32px));
-}
-
-.assistant-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.assistant-title {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 0.72rem;
-  color: #67e8f9;
-  margin-bottom: 8px;
-}
-
-.assistant-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.assistant-controls button {
-  border: 1px solid rgba(148, 163, 184, 0.34);
-  background: rgba(15, 23, 42, 0.48);
-  color: #cbd5e1;
-  border-radius: 8px;
-  cursor: pointer;
-  width: 24px;
-  height: 24px;
-  line-height: 1;
-}
-
-.assistant-reopen {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  border-radius: 999px;
-  border: 1px solid rgba(14, 165, 233, 0.45);
-  background: rgba(2, 6, 23, 0.95);
-  color: #67e8f9;
-  padding: 8px 12px;
-  font: inherit;
-  cursor: pointer;
-  z-index: 20;
-}
-
-.assistant-summary {
-  margin: 0;
-  color: #cbd5e1;
-  line-height: 1.5;
-  font-size: 0.84rem;
-}
-
-.assistant-list {
-  margin: 8px 0 0;
-  padding-left: 18px;
-  display: grid;
-  gap: 6px;
-  color: #dbeafe;
-  font-size: 0.8rem;
-}
-
-.assistant-list code {
-  font-family: "IBM Plex Mono", monospace;
-  background: rgba(148, 163, 184, 0.2);
-  padding: 2px 6px;
-  border-radius: 7px;
-}
-
 .chart-wrap {
   height: 260px;
 }
@@ -742,15 +601,6 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .floating-assistant {
-    position: static;
-    width: 100%;
-  }
-
-  .intervention-toast {
-    right: 10px;
-    top: 10px;
-  }
 }
 
 @media (max-width: 640px) {
@@ -763,6 +613,10 @@ body {
   }
 
   .risk-input-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .grade-slots-grid {
     grid-template-columns: 1fr;
   }
 

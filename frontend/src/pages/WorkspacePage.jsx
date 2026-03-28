@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import FloatingAssistant from "../components/FloatingAssistant";
-import InterventionPopup from "../components/InterventionPopup";
 import { endSession, markInterventionApplied, recordMetrics, startSession } from "../lib/api";
 
 const GRADE_OPTIONS = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
+const GRADE_SLOT_COUNT = 6;
 const RISK_LEVEL_ORDER = { Low: 1, Moderate: 2, High: 3 };
 const SMART_REMINDER_DELAYS_MS = [0, 3 * 60 * 1000, 8 * 60 * 1000];
 const SMART_MODE_CONFIG = {
-  Normal: { inactivityMs: 50000, lostFocusMs: 75000 },
-  Focus: { inactivityMs: 35000, lostFocusMs: 55000 },
-  Chill: { inactivityMs: 80000, lostFocusMs: 110000 }
+  Normal: { inactivityMs: 90000, lostFocusMs: 120000 },
+  Focus: { inactivityMs: 65000, lostFocusMs: 90000 },
+  Chill: { inactivityMs: 120000, lostFocusMs: 150000 }
 };
 
 function WorkspacePage() {
@@ -27,7 +26,8 @@ function WorkspacePage() {
   const [gradesInput, setGradesInput] = useState({
     currentGrade: "B+",
     upcomingAssessment: "",
-    gradePortalLink: ""
+    gradePortalLink: "",
+    courseGrades: buildEmptyCourseGrades()
   });
   const [portalStatus, setPortalStatus] = useState("");
   const [riskAdjustment, setRiskAdjustment] = useState(0);
@@ -37,6 +37,7 @@ function WorkspacePage() {
   const [priorityTopics, setPriorityTopics] = useState([]);
   const [focusModeRunning, setFocusModeRunning] = useState(false);
   const [focusModeSeconds, setFocusModeSeconds] = useState(60);
+  const [focusModeDuration, setFocusModeDuration] = useState(60);
   const [smartNudges, setSmartNudges] = useState({
     enabled: false,
     mode: "Normal",
@@ -59,7 +60,9 @@ function WorkspacePage() {
 
   const [signal, setSignal] = useState({
     issueType: null,
+    issueDisplayType: null,
     issueSeverity: null,
+    statusLabel: "Live monitoring",
     procrastinationScore: 0,
     distractionScore: 0,
     lowFocusScore: 0,
@@ -84,6 +87,7 @@ function WorkspacePage() {
   const [interventionHistory, setInterventionHistory] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [impactNote, setImpactNote] = useState("No intervention impact yet.");
+  const [liveInterventionDetail, setLiveInterventionDetail] = useState("");
 
   const sessionStartRef = useRef(Date.now());
   const lastInputRef = useRef(Date.now());
@@ -107,13 +111,14 @@ function WorkspacePage() {
     () =>
       computeGradesRiskState({
         currentGrade: gradesInput.currentGrade,
+        courseGrades: gradesInput.courseGrades,
         upcomingAssessment: gradesInput.upcomingAssessment,
         signal,
         telemetry,
         context,
         riskAdjustment
       }),
-    [gradesInput.currentGrade, gradesInput.upcomingAssessment, signal, telemetry, context, riskAdjustment]
+    [gradesInput.currentGrade, gradesInput.courseGrades, gradesInput.upcomingAssessment, signal, telemetry, context, riskAdjustment]
   );
 
   const combinedTimeline = useMemo(() => {
@@ -126,11 +131,6 @@ function WorkspacePage() {
     () => attachRiskToIntervention(activeIntervention, riskState, smartNudges),
     [activeIntervention, riskState, smartNudges]
   );
-
-  const enrichedAssistantIntervention = useMemo(() => {
-    const fallback = interventionHistory[0] || null;
-    return attachRiskToIntervention(enrichedActiveIntervention || fallback, riskState);
-  }, [enrichedActiveIntervention, interventionHistory, riskState]);
 
   const addRiskTimelineEvent = useCallback((eventType, label, details) => {
     setRiskEvents((prev) =>
@@ -193,7 +193,9 @@ function WorkspacePage() {
 
       setSignal({
         issueType: null,
+        issueDisplayType: null,
         issueSeverity: null,
+        statusLabel: "Live monitoring",
         procrastinationScore: 0,
         distractionScore: 0,
         lowFocusScore: 0,
@@ -203,6 +205,7 @@ function WorkspacePage() {
       });
       setImpactNote("No intervention impact yet.");
       setActiveIntervention(null);
+      setLiveInterventionDetail("");
       setInterventionHistory([]);
       setTimeline([]);
       setRiskEvents([]);
@@ -212,6 +215,13 @@ function WorkspacePage() {
       setPriorityTopics([]);
       setFocusModeRunning(false);
       setFocusModeSeconds(60);
+      setFocusModeDuration(60);
+      setGradesInput({
+        currentGrade: "B+",
+        upcomingAssessment: "",
+        gradePortalLink: "",
+        courseGrades: buildEmptyCourseGrades()
+      });
       setPortalStatus("");
       setSmartNudgeStatus("Smart Nudges are off.");
       setReminderLogs([]);
@@ -283,6 +293,7 @@ function WorkspacePage() {
 
       if (realtime?.intervention) {
         setActiveIntervention(realtime.intervention);
+        setLiveInterventionDetail("");
         setInterventionHistory((prev) => {
           if (prev.some((item) => item.id === realtime.intervention.id)) {
             return prev;
@@ -560,6 +571,12 @@ function WorkspacePage() {
           setSmartNudgeStatus("Notification opened. User returned.");
           notification.close();
         };
+      } else {
+        addSmartNudgeEvent(
+          "notification_skipped",
+          "Browser notification skipped",
+          "Permission not granted. Enable notifications for real alerts."
+        );
       }
 
       if (smartNudges.smsEnabled && isPhoneNumberValid(smartNudges.phoneNumber)) {
@@ -598,7 +615,7 @@ function WorkspacePage() {
     telemetry.typingSpeed
   ]);
 
-  function handleInterventionAction(intervention, action) {
+function handleInterventionAction(intervention, action) {
     if (!intervention || !sessionId) {
       return "";
     }
@@ -626,11 +643,13 @@ function WorkspacePage() {
 
     const beforeMinutes = estimateWastedMinutes(signal, telemetry);
     const improvementMap = {
+      lock_in_2m: 0.4,
       refocus_timer: 0.4,
       break_steps: 0.25,
       try_new_approach: 0.22,
       short_break: 0.18,
-      resume_task: 0.2
+      resume_task: 0.2,
+      ignore: 0
     };
 
     const reductionWeight = improvementMap[action] || 0.2;
@@ -645,6 +664,14 @@ function WorkspacePage() {
       addRiskTimelineEvent("focus_mode_started", "Focus mode started", "Triggered through intervention action.");
       setFocusModeRunning(true);
       setFocusModeSeconds(60);
+      setFocusModeDuration(60);
+    }
+
+    if (action === "lock_in_2m") {
+      addRiskTimelineEvent("focus_mode_started", "2-minute lock-in started", "Triggered through intervention action.");
+      setFocusModeRunning(true);
+      setFocusModeSeconds(120);
+      setFocusModeDuration(120);
     }
 
     if (action === "short_break" || action === "resume_task") {
@@ -655,18 +682,18 @@ function WorkspacePage() {
   }
 
   function handleAnalyzePortalLink() {
-    const parsedGrade = parseGradeFromPortalLink(gradesInput.gradePortalLink);
+    const parsed = parseGradeFromPortalLink(gradesInput.gradePortalLink, gradesInput.currentGrade);
     if (!gradesInput.gradePortalLink.trim()) {
       setPortalStatus("Add a grade portal link to simulate parsing.");
       return;
     }
 
-    if (parsedGrade) {
-      setGradesInput((prev) => ({ ...prev, currentGrade: parsedGrade }));
-      setPortalStatus(`Parsed grade signal: ${parsedGrade}`);
-      addRiskTimelineEvent("grade_parsed", `Portal grade parsed (${parsedGrade})`, "Grade portal link provided a grade signal.");
+    if (parsed.grade) {
+      setGradesInput((prev) => ({ ...prev, currentGrade: parsed.grade }));
+      setPortalStatus(parsed.message);
+      addRiskTimelineEvent("grade_parsed", `Portal grade parsed (${parsed.grade})`, parsed.source);
     } else {
-      setPortalStatus("No grade token found in link. Using your selected grade.");
+      setPortalStatus(parsed.message);
     }
   }
 
@@ -679,6 +706,7 @@ function WorkspacePage() {
       if (!focusModeRunning) {
         setFocusModeRunning(true);
         setFocusModeSeconds(60);
+        setFocusModeDuration(60);
         setRiskAdjustment((current) => Math.min(0.45, current + 0.08));
         addRiskTimelineEvent("focus_mode_started", "Focus mode started", "Started a 60-second sprint.");
       }
@@ -713,6 +741,15 @@ function WorkspacePage() {
 
     setSmartNudgeStatus(`Smart Nudges enabled in ${smartNudges.mode} mode.`);
     addSmartNudgeEvent("nudge_enabled", "Smart Nudges enabled", `Mode: ${smartNudges.mode}`);
+  }
+
+  function updateCourseGrade(index, key, value) {
+    setGradesInput((prev) => ({
+      ...prev,
+      courseGrades: prev.courseGrades.map((entry, entryIndex) =>
+        entryIndex === index ? { ...entry, [key]: value } : entry
+      )
+    }));
   }
 
   function handleSmartNudgeMode(mode) {
@@ -758,7 +795,7 @@ function WorkspacePage() {
   }
 
   const issueLabel = signal.issueType
-    ? `${signal.issueType.replaceAll("_", " ")} (${signal.issueSeverity || "low"})`
+    ? `${(signal.issueDisplayType || signal.issueType).replaceAll("_", " ")} (${signal.issueSeverity || "low"})`
     : "No active issue";
 
   const behaviorRiskPct = Math.round(
@@ -770,7 +807,11 @@ function WorkspacePage() {
     ) * 100
   );
 
-  const focusModeProgress = Math.max(0, Math.min(100, Math.round(((60 - focusModeSeconds) / 60) * 100)));
+  const focusModeProgress = Math.max(
+    0,
+    Math.min(100, Math.round(((focusModeDuration - focusModeSeconds) / Math.max(1, focusModeDuration)) * 100))
+  );
+  const displayIntervention = enrichedActiveIntervention || interventionHistory[0] || null;
 
   return (
     <main className="page-shell">
@@ -884,6 +925,81 @@ function WorkspacePage() {
                   <h4>Impact System</h4>
                   <p>{impactNote}</p>
                 </div>
+
+                {displayIntervention ? (
+                  <div className="timeline-box">
+                    <h4>Active Intervention</h4>
+                    <p>
+                      <strong>What:</strong> {displayIntervention.what || displayIntervention.message}
+                    </p>
+                    <p>
+                      <strong>Why:</strong> {displayIntervention.why || displayIntervention.reason}
+                    </p>
+                    <p>
+                      <strong>Next:</strong> {displayIntervention.nextAction}
+                    </p>
+                    <div className="risk-actions">
+                      <button
+                        className="btn btn-primary"
+                        onClick={() =>
+                          setLiveInterventionDetail(
+                            handleInterventionAction(displayIntervention, "lock_in_2m") ||
+                              "2-minute lock-in started."
+                          )
+                        }
+                        type="button"
+                      >
+                        Lock In (2 min focus)
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() =>
+                          setLiveInterventionDetail(
+                            handleInterventionAction(displayIntervention, "break_steps") || "Break steps generated."
+                          )
+                        }
+                        type="button"
+                      >
+                        Break into Steps
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() =>
+                          setLiveInterventionDetail(
+                            handleInterventionAction(displayIntervention, "try_new_approach") ||
+                              "Try a new approach now."
+                          )
+                        }
+                        type="button"
+                      >
+                        Try New Approach
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() =>
+                          setLiveInterventionDetail(
+                            handleInterventionAction(displayIntervention, "resume_task") || "Task resumed."
+                          )
+                        }
+                        type="button"
+                      >
+                        Resume Task
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() =>
+                          setLiveInterventionDetail(
+                            handleInterventionAction(displayIntervention, "ignore") || "Ignored for now."
+                          )
+                        }
+                        type="button"
+                      >
+                        Ignore
+                      </button>
+                    </div>
+                    {liveInterventionDetail ? <p className="monitor-note">{liveInterventionDetail}</p> : null}
+                  </div>
+                ) : null}
               </article>
 
               <aside className="panel panel-side">
@@ -959,6 +1075,39 @@ function WorkspacePage() {
                       placeholder="Paste grade portal link to simulate parsing"
                     />
                   </label>
+                </div>
+
+                <div className="timeline-box">
+                  <h4>Course Grade Inputs (6 slots)</h4>
+                  <div className="grade-slots-grid">
+                    {gradesInput.courseGrades.map((entry, index) => (
+                      <div className="grade-slot-card" key={entry.id}>
+                        <label className="risk-field">
+                          Course {index + 1}
+                          <input
+                            type="text"
+                            value={entry.course}
+                            onChange={(event) => updateCourseGrade(index, "course", event.target.value)}
+                            placeholder={`e.g. Course ${index + 1}`}
+                          />
+                        </label>
+                        <label className="risk-field">
+                          Grade
+                          <select
+                            value={entry.grade}
+                            onChange={(event) => updateCourseGrade(index, "grade", event.target.value)}
+                          >
+                            <option value="">Select</option>
+                            {GRADE_OPTIONS.map((grade) => (
+                              <option key={`${entry.id}-${grade}`} value={grade}>
+                                {grade}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="action-row">
@@ -1145,18 +1294,6 @@ function WorkspacePage() {
         </>
       ) : null}
 
-      {sessionId ? (
-        <FloatingAssistant
-          context={context}
-          signal={signal}
-          intervention={enrichedAssistantIntervention}
-          sessionId={sessionId}
-        />
-      ) : null}
-
-      {sessionId && context.activityType !== "none_detected" ? (
-        <InterventionPopup intervention={enrichedActiveIntervention} onAction={handleInterventionAction} />
-      ) : null}
     </main>
   );
 }
@@ -1192,8 +1329,15 @@ function estimateWastedMinutes(signal, telemetry) {
   return Math.max(1, Math.round(base * (0.6 + friction)));
 }
 
-function computeGradesRiskState({ currentGrade, upcomingAssessment, signal, telemetry, context, riskAdjustment }) {
-  const gradeRisk = gradeToRisk(currentGrade);
+function computeGradesRiskState({ currentGrade, courseGrades, upcomingAssessment, signal, telemetry, context, riskAdjustment }) {
+  const filledCourseGrades = (courseGrades || []).map((entry) => entry.grade).filter((value) => GRADE_OPTIONS.includes(value));
+  const gradeSamples = [currentGrade, ...filledCourseGrades].filter((value) => GRADE_OPTIONS.includes(value));
+  const gradeRisk =
+    gradeSamples.length > 0
+      ? gradeSamples.reduce((sum, grade) => sum + gradeToRisk(grade), 0) / gradeSamples.length
+      : gradeToRisk(currentGrade);
+  const gradeLabel =
+    filledCourseGrades.length > 0 ? `${currentGrade} baseline + ${filledCourseGrades.length} course grades` : currentGrade;
   const behaviorRisk = Math.max(
     signal.procrastinationScore || 0,
     signal.distractionScore || 0,
@@ -1219,15 +1363,15 @@ function computeGradesRiskState({ currentGrade, upcomingAssessment, signal, tele
     level = "Moderate";
   }
 
-  let predictedOutcome = `Your current pattern supports steady performance around ${currentGrade}.`;
+  let predictedOutcome = `Your current pattern supports steady performance around ${gradeLabel}.`;
   if (level === "Moderate") {
-    predictedOutcome = `Based on your current grade (${currentGrade}) and recent behavior, continued interruptions may lower your next assessment performance.`;
+    predictedOutcome = `Based on your grade profile (${gradeLabel}) and recent behavior, continued interruptions may lower your next assessment performance.`;
   }
   if (level === "High") {
     predictedOutcome = `Your current pace suggests incomplete coverage before ${upcomingAssessment || "your next assessment"} unless focus stabilizes.`;
   }
 
-  const explanation = `Current grade signal (${currentGrade}) plus ${context.activityType} behavior indicates ${level.toLowerCase()} academic risk.`;
+  const explanation = `Current grade signal (${gradeLabel}) plus ${context.activityType} behavior indicates ${level.toLowerCase()} academic risk.`;
   const consequence =
     level === "Low"
       ? "You are on track if consistency continues."
@@ -1244,7 +1388,7 @@ function computeGradesRiskState({ currentGrade, upcomingAssessment, signal, tele
   return {
     score,
     level,
-    gradeLabel: currentGrade,
+    gradeLabel,
     predictedOutcome,
     explanation,
     consequence,
@@ -1325,29 +1469,84 @@ function riskClassName(level) {
   return "high";
 }
 
-function parseGradeFromPortalLink(link) {
+function parseGradeFromPortalLink(link, fallbackGrade = "B+") {
   const clean = String(link || "").trim();
   if (!clean) {
-    return null;
+    return {
+      grade: null,
+      source: "No link provided.",
+      message: "Add a grade portal link to simulate parsing."
+    };
   }
+
+  const tokenKeys = [
+    "grade",
+    "current_grade",
+    "currentGrade",
+    "letterGrade",
+    "letter",
+    "score",
+    "percent",
+    "pct",
+    "g"
+  ];
 
   try {
     const parsed = new URL(clean);
-    const gradeToken = parsed.searchParams.get("grade");
-    if (GRADE_OPTIONS.includes(gradeToken)) {
-      return gradeToken;
+    for (const key of tokenKeys) {
+      const rawToken = parsed.searchParams.get(key);
+      const normalized = normalizeGradeToken(rawToken);
+      if (normalized) {
+        return {
+          grade: normalized,
+          source: `Grade token found in query param "${key}".`,
+          message: `Parsed grade signal: ${normalized}`
+        };
+      }
+    }
+
+    const pathMatch = safeDecode(`${parsed.pathname} ${parsed.hash}`).match(
+      /(grade|score|letter)[^a-zA-Z0-9]{0,8}([A-F][+-]?|[0-9]{1,3}(?:\.[0-9]+)?%?)/i
+    );
+    if (pathMatch?.[2]) {
+      const normalized = normalizeGradeToken(pathMatch[2]);
+      if (normalized) {
+        return {
+          grade: normalized,
+          source: "Grade token found in URL path/hash.",
+          message: `Parsed grade signal: ${normalized}`
+        };
+      }
     }
   } catch {
     // Ignore parse failure and continue with regex extraction.
   }
 
-  const match = clean.match(/\b(A-|A|B\+|B-|B|C\+|C-|C|D|F)\b/i);
-  if (!match) {
-    return null;
+  const tokenMatch = safeDecode(clean).match(/\b(A\+|A-|A|B\+|B-|B|C\+|C-|C|D|F|[0-9]{1,3}(?:\.[0-9]+)?%?)\b/i);
+  if (tokenMatch?.[1]) {
+    const normalized = normalizeGradeToken(tokenMatch[1]);
+    if (normalized) {
+      return {
+        grade: normalized,
+        source: "Grade token found in raw link text.",
+        message: `Parsed grade signal: ${normalized}`
+      };
+    }
   }
 
-  const normalized = match[1].toUpperCase();
-  return GRADE_OPTIONS.includes(normalized) ? normalized : null;
+  if (/grade|report|portal|progress|classroom|canvas|blackboard|schoology/i.test(clean)) {
+    return {
+      grade: fallbackGrade,
+      source: "Portal URL detected without explicit grade token.",
+      message: `Portal detected. Using your selected grade (${fallbackGrade}) as baseline.`
+    };
+  }
+
+  return {
+    grade: null,
+    source: "No grade token found in link.",
+    message: "Could not parse a grade from this link. Add grade in URL (e.g. ?grade=B+) or keep manual grade."
+  };
 }
 
 function isPhoneNumberValid(value) {
@@ -1362,6 +1561,77 @@ function formatPhoneForDisplay(value) {
   }
   const core = digits.slice(-10);
   return `(${core.slice(0, 3)}) ${core.slice(3, 6)}-${core.slice(6)}`;
+}
+
+function buildEmptyCourseGrades() {
+  return Array.from({ length: GRADE_SLOT_COUNT }, (_value, index) => ({
+    id: `course-${index + 1}`,
+    course: "",
+    grade: ""
+  }));
+}
+
+function normalizeGradeToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const compact = raw.toUpperCase().replace(/\s+/g, "");
+  const textExpanded = compact.replaceAll("PLUS", "+").replaceAll("MINUS", "-");
+
+  if (GRADE_OPTIONS.includes(textExpanded)) {
+    return textExpanded;
+  }
+
+  if (/^[0-9]{1,3}(\.[0-9]+)?%?$/.test(textExpanded)) {
+    const numeric = Number(textExpanded.replace("%", ""));
+    if (!Number.isFinite(numeric)) {
+      return null;
+    }
+    return percentToLetterGrade(numeric);
+  }
+
+  return null;
+}
+
+function percentToLetterGrade(percent) {
+  if (percent >= 93) {
+    return "A";
+  }
+  if (percent >= 90) {
+    return "A-";
+  }
+  if (percent >= 87) {
+    return "B+";
+  }
+  if (percent >= 83) {
+    return "B";
+  }
+  if (percent >= 80) {
+    return "B-";
+  }
+  if (percent >= 77) {
+    return "C+";
+  }
+  if (percent >= 73) {
+    return "C";
+  }
+  if (percent >= 70) {
+    return "C-";
+  }
+  if (percent >= 60) {
+    return "D";
+  }
+  return "F";
+}
+
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function extractPageTextSample() {
