@@ -13,9 +13,7 @@ Nudge is built to intervene in the moment.
 Nudge monitors live work behavior across coding, studying, writing, and browsing contexts, then detects:
 
 - distraction / inactivity
-- low focus
 - procrastination patterns
-- inefficiency loops
 
 When risk is detected, it triggers actionable interventions in real time.
 
@@ -41,7 +39,7 @@ It is a behavior-first intervention system that:
   - scroll behavior
   - time on task
 - Strict inactivity detection:
-  - 90s no activity trigger
+  - 60s no activity trigger
   - "Distraction / Inactivity" intervention
   - 3-minute follow-up reminder when ignored
 - Live intervention actions:
@@ -138,7 +136,7 @@ npm run dev
 
 1. Start a session from the homepage.
 2. Work normally for 20–30 seconds.
-3. Stop all activity for ~90 seconds.
+3. Stop all activity for ~60 seconds.
 4. Observe "Distraction / Inactivity" intervention + notification.
 5. Click **Lock In (2 min focus)**.
 6. Watch risk/focus improve in timeline and dashboard.

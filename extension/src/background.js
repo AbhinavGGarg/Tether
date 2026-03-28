@@ -1,15 +1,13 @@
 const tabSessions = new Map();
 
 const LIVE_RESULTS_URL = "https://nudge-frontend-ten.vercel.app";
-const STRICT_INACTIVITY_MS = 90 * 1000;
+const STRICT_INACTIVITY_MS = 60 * 1000;
 const INACTIVITY_NOTIFICATION_COOLDOWN_MS = 90 * 1000;
 
 const SESSION_COOLDOWN_MS = {
   procrastination: 90000,
   distraction: 80000,
-  distraction_inactivity: 90000,
-  low_focus: 100000,
-  inefficiency: 110000
+  inactivity: 90000
 };
 
 const ACTION_SNOOZE_MS = {
@@ -29,6 +27,39 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabSessions.delete(tabId);
   chrome.storage.local.remove([`nudge_tab_${tabId}`]).catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!tabSessions.has(tabId)) {
+    return;
+  }
+
+  const session = tabSessions.get(tabId);
+  session.url = tab?.url || session.url;
+  session.title = tab?.title || session.title;
+  const refreshedContext = classifyContext({
+    typingSpeed: session.lastMetrics?.typingSpeed || 0,
+    pauseDurationMs: session.lastMetrics?.pauseDurationMs || 0,
+    idleDurationMs: session.lastMetrics?.idleDurationMs || 0,
+    repeatedActions: session.lastMetrics?.repeatedActions || 0,
+    repeatedEdits: 0,
+    deletionRate: 0,
+    scrollSpeed: session.lastMetrics?.scrollSpeed || 0,
+    scrollBursts: 0,
+    scrollDistance: 0,
+    tabSwitchesDelta: session.lastMetrics?.tabSwitchesDelta || 0,
+    timeOnTaskMs: session.aggregate?.timeOnTaskMs || 0,
+    keystrokesDelta: 0,
+    contextSample: "",
+    pageTextSample: "",
+    pageTitle: session.title || session.context?.pageTitle || "",
+    url: session.url || "",
+    hasVideo: false,
+    hasEditable: false
+  });
+  session.context = refreshedContext;
+  session.updatedAt = Date.now();
+  void persistState(tabId, session);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -150,7 +181,7 @@ async function handleActionMessage(message, sender) {
   target.respondedAt = Date.now();
   target.applied = ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(action);
 
-  const snoozeKey = target.strategy === "inactivity_strict" ? "distraction_inactivity" : target.type;
+  const snoozeKey = target.strategy === "inactivity_strict" ? "inactivity" : target.type;
   if (ACTION_SNOOZE_MS[action] && snoozeKey) {
     session.snoozedByType[snoozeKey] = Date.now() + ACTION_SNOOZE_MS[action];
   }
@@ -242,8 +273,7 @@ function ensureSession(tabId, url, title) {
     issueCounters: {
       procrastination: 0,
       distraction: 0,
-      low_focus: 0,
-      inefficiency: 0
+      inactivity: 0
     },
     interventions: [],
     timeline: [],
@@ -256,8 +286,6 @@ function ensureSession(tabId, url, title) {
       statusLabel: "Live monitoring",
       procrastinationScore: 0,
       distractionScore: 0,
-      lowFocusScore: 0,
-      inefficiencyScore: 0,
       focusScore: 72,
       focusImprovementPct: 0
     },
@@ -390,8 +418,6 @@ function detectIssue(session, metrics, context) {
   const baseDiagnostics = {
     procrastinationScore: 0,
     distractionScore: 0,
-    lowFocusScore: 0,
-    inefficiencyScore: 0,
     focusScore: session.lastSignal?.focusScore || 72,
     pauseDurationMs: metrics.pauseDurationMs,
     idleDurationMs: metrics.idleDurationMs,
@@ -401,10 +427,7 @@ function detectIssue(session, metrics, context) {
 
   const pauseFactor = clamp(metrics.pauseDurationMs / 22000);
   const idleFactor = clamp(metrics.idleDurationMs / 45000);
-  const repeatFactor = clamp(metrics.repeatedActions / 8);
-  const retriesFactor = clamp(metrics.repeatedEdits / 7);
   const tabFactor = clamp(metrics.tabSwitchesDelta / 3);
-  const lowTypingFactor = clamp((0.9 - metrics.typingSpeed) / 0.9);
   const activityVariance = clamp(
     Math.abs(metrics.typingSpeed - (session.lastMetrics?.typingSpeed || 0)) / 1.2 + metrics.scrollBursts / 10
   );
@@ -413,19 +436,14 @@ function detectIssue(session, metrics, context) {
   const lowProgressFactor = clamp(1 - progressSignal);
 
   const procrastinationScore = tabFactor * 0.45 + activityVariance * 0.35 + lowProgressFactor * 0.2;
-  const distractionScore = idleFactor * 0.6 + pauseFactor * 0.25 + lowTypingFactor * 0.15;
-  const lowFocusScore = lowTypingFactor * 0.4 + pauseFactor * 0.35 + repeatFactor * 0.25;
-  const inefficiencyScore = repeatFactor * 0.45 + retriesFactor * 0.3 + lowProgressFactor * 0.25;
+  const distractionScore = idleFactor * 0.7 + pauseFactor * 0.3;
 
-  const focusPenalty =
-    procrastinationScore * 0.28 + distractionScore * 0.32 + lowFocusScore * 0.22 + inefficiencyScore * 0.18;
+  const focusPenalty = procrastinationScore * 0.45 + distractionScore * 0.55;
   const focusScore = Math.round(Math.max(0, Math.min(100, 100 - focusPenalty * 85)));
 
   const diagnostics = {
     procrastinationScore: Number(procrastinationScore.toFixed(2)),
     distractionScore: Number(distractionScore.toFixed(2)),
-    lowFocusScore: Number(lowFocusScore.toFixed(2)),
-    inefficiencyScore: Number(inefficiencyScore.toFixed(2)),
     focusScore,
     pauseDurationMs: metrics.pauseDurationMs,
     idleDurationMs: metrics.idleDurationMs,
@@ -435,7 +453,10 @@ function detectIssue(session, metrics, context) {
 
   const inactivityStrict =
     metrics.pauseDurationMs >= STRICT_INACTIVITY_MS &&
-    metrics.idleDurationMs >= STRICT_INACTIVITY_MS;
+    metrics.idleDurationMs >= STRICT_INACTIVITY_MS &&
+    metrics.keystrokesDelta === 0 &&
+    metrics.scrollDistance === 0 &&
+    metrics.tabSwitchesDelta === 0;
 
   if (inactivityStrict) {
     diagnostics.distractionScore = Math.max(diagnostics.distractionScore, 0.92);
@@ -443,12 +464,12 @@ function detectIssue(session, metrics, context) {
 
     return {
       issue: {
-        type: "distraction",
+        type: "inactivity",
         strategy: "inactivity_strict",
-        displayType: "Distraction / Inactivity",
+        displayType: "Inactivity",
         score: Number(diagnostics.distractionScore.toFixed(2)),
         severity: "high",
-        reason: "You’ve been inactive for over a minute. You may be losing focus."
+        reason: "You've been inactive for 60 seconds."
       },
       diagnostics
     };
@@ -501,18 +522,6 @@ function detectIssue(session, metrics, context) {
       score: distractionScore,
       threshold: 0.58,
       reason: "No activity trend suggests attention drift. Are you still working?"
-    },
-    {
-      type: "low_focus",
-      score: lowFocusScore,
-      threshold: 0.57,
-      reason: "Typing speed dropped and pauses increased. You may be losing focus."
-    },
-    {
-      type: "inefficiency",
-      score: inefficiencyScore,
-      threshold: 0.6,
-      reason: "You are repeating actions without visible progress."
     }
   ].sort((a, b) => b.score - a.score);
 
@@ -546,8 +555,6 @@ function buildSignal(issue, diagnostics, previousSignal = null) {
       statusLabel: "Live monitoring",
       procrastinationScore: diagnostics?.procrastinationScore || 0,
       distractionScore: diagnostics?.distractionScore || 0,
-      lowFocusScore: diagnostics?.lowFocusScore || 0,
-      inefficiencyScore: diagnostics?.inefficiencyScore || 0,
       focusScore: diagnostics?.focusScore || priorFocus,
       focusImprovementPct: 0
     };
@@ -557,11 +564,14 @@ function buildSignal(issue, diagnostics, previousSignal = null) {
     issueType: issue.type,
     issueDisplayType: issue.displayType || humanizeIssue(issue.type),
     issueSeverity: issue.severity,
-    statusLabel: issue.type === "distraction" ? "Distraction detected" : `${humanizeIssue(issue.type)} detected`,
+    statusLabel:
+      issue.type === "inactivity"
+        ? "Inactivity detected"
+        : issue.type === "distraction"
+          ? "Distraction detected"
+          : "Procrastination detected",
     procrastinationScore: diagnostics?.procrastinationScore || 0,
     distractionScore: diagnostics?.distractionScore || 0,
-    lowFocusScore: diagnostics?.lowFocusScore || 0,
-    inefficiencyScore: diagnostics?.inefficiencyScore || 0,
     focusScore: diagnostics?.focusScore || priorFocus,
     focusImprovementPct: 0
   };
@@ -572,7 +582,7 @@ function canEmitIntervention(session, issue) {
     return false;
   }
 
-  const issueKey = issue.strategy === "inactivity_strict" ? "distraction_inactivity" : issue.type;
+  const issueKey = issue.strategy === "inactivity_strict" ? "inactivity" : issue.type;
   if (issue.strategy === "inactivity_strict" && session.inactivityReminderStopped) {
     return false;
   }
@@ -613,9 +623,9 @@ function buildIntervention(issue, context, diagnostics) {
       reason: issue.reason,
       diagnostics,
       title: "Distraction / Inactivity",
-      message: "You’ve been inactive for over a minute. You may be losing focus.",
-      what: "You’ve been inactive for over a minute. You may be losing focus.",
-      why: "No typing, interaction, or activity was detected for 90 seconds.",
+      message: "You've been inactive for 60 seconds. You may be losing focus.",
+      what: "You've been inactive for 60 seconds. You may be losing focus.",
+      why: "No typing, interaction, or activity was detected for 60 seconds.",
       nextAction: "Lock back in for 2 minutes to regain momentum.",
       actions: ["lock_in_2m", "resume_task", "ignore"],
       actionPayloads: {
@@ -640,22 +650,10 @@ function buildIntervention(issue, context, diagnostics) {
       what: "No activity was detected for a while.",
       why: "Extended inactivity usually means attention drift.",
       nextAction: "Run a short focus sprint or take a quick intentional break."
-    },
-    low_focus: {
-      title: "Low Focus Signal",
-      what: "Your activity slowed down with longer pauses.",
-      why: "Reduced momentum can indicate cognitive fatigue.",
-      nextAction: "Reset with one small next action and execute immediately."
-    },
-    inefficiency: {
-      title: "Inefficiency Pattern",
-      what: "You are repeating actions without clear progress.",
-      why: "Repetition without outcomes wastes effort and time.",
-      nextAction: "Change strategy and target a measurable next result."
     }
   };
 
-  const pick = templates[issue.type] || templates.low_focus;
+  const pick = templates[issue.type] || templates.distraction;
 
   return {
     id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -713,18 +711,11 @@ function simulateImprovement(session, issueType, action) {
 
   next.procrastinationScore = Number(Math.max(0, (next.procrastinationScore || 0) - drop).toFixed(2));
   next.distractionScore = Number(Math.max(0, (next.distractionScore || 0) - drop).toFixed(2));
-  next.lowFocusScore = Number(Math.max(0, (next.lowFocusScore || 0) - drop).toFixed(2));
-  next.inefficiencyScore = Number(Math.max(0, (next.inefficiencyScore || 0) - drop).toFixed(2));
 
   next.focusScore = Math.min(100, Math.round((next.focusScore || 65) + pct));
   next.focusImprovementPct = pct;
 
-  const maxScore = Math.max(
-    next.procrastinationScore || 0,
-    next.distractionScore || 0,
-    next.lowFocusScore || 0,
-    next.inefficiencyScore || 0
-  );
+  const maxScore = Math.max(next.procrastinationScore || 0, next.distractionScore || 0);
 
   if (!issueType || issueType === next.issueType) {
     if (maxScore < 0.45) {
@@ -825,17 +816,7 @@ function actionLabel(action) {
 }
 
 function normalizeAction(action) {
-  const mapping = {
-    show_suggestion: "break_steps",
-    try_action: "resume_task",
-    ignore: "ignore",
-    show_fix: "break_steps",
-    give_hint: "try_new_approach",
-    refocus: "refocus_timer",
-    summarize: "resume_task"
-  };
-
-  const resolved = mapping[action] || action;
+  const resolved = String(action || "");
   if (
     ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task", "ignore"].includes(
       resolved
@@ -896,10 +877,10 @@ function processIgnoredReminderFollowUp(session, metrics) {
 
   session.lastSignal = {
     ...(session.lastSignal || {}),
-    issueType: "distraction",
-    issueDisplayType: "Distraction / Inactivity",
+    issueType: "inactivity",
+    issueDisplayType: "Inactivity",
     issueSeverity: "high",
-    statusLabel: "Distraction detected",
+    statusLabel: "Inactivity detected",
     distractionScore: Math.max(session.lastSignal?.distractionScore || 0, 0.94),
     focusScore: Math.min(session.lastSignal?.focusScore || 72, 28)
   };

@@ -50,10 +50,13 @@ function sanitizePayload(parsed, fallback) {
     message: parsed.message || fallback.message,
     nextAction: parsed.nextAction || fallback.nextAction,
     actionPayloads: {
-      show_fix: actionPayloads.show_fix || fallback.actionPayloads.show_fix,
-      give_hint: actionPayloads.give_hint || fallback.actionPayloads.give_hint,
-      refocus: actionPayloads.refocus || fallback.actionPayloads.refocus,
-      summarize: actionPayloads.summarize || fallback.actionPayloads.summarize
+      lock_in_2m: actionPayloads.lock_in_2m || fallback.actionPayloads.lock_in_2m,
+      refocus_timer: actionPayloads.refocus_timer || fallback.actionPayloads.refocus_timer,
+      break_steps: actionPayloads.break_steps || fallback.actionPayloads.break_steps,
+      try_new_approach: actionPayloads.try_new_approach || fallback.actionPayloads.try_new_approach,
+      short_break: actionPayloads.short_break || fallback.actionPayloads.short_break,
+      resume_task: actionPayloads.resume_task || fallback.actionPayloads.resume_task,
+      ignore: actionPayloads.ignore || fallback.actionPayloads.ignore
     },
     impactBefore: parsed.impactBefore || fallback.impactBefore,
     impactAfter: parsed.impactAfter || fallback.impactAfter
@@ -74,7 +77,7 @@ Return JSON only with keys:
 - nextAction
 - impactBefore
 - impactAfter
-- actionPayloads: { show_fix, give_hint, refocus, summarize }
+- actionPayloads: { lock_in_2m, refocus_timer, break_steps, try_new_approach, short_break, resume_task, ignore }
 
 Constraints:
 - Keep title under 6 words.

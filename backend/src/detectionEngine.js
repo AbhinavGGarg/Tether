@@ -1,5 +1,7 @@
 import { CONTEXT_PROFILES } from "./knowledgeGraph.js";
 
+const STRICT_INACTIVITY_MS = 60 * 1000;
+
 function normalizeMetrics(raw = {}) {
   return {
     typingSpeed: numberOrZero(raw.typingSpeed),
@@ -27,8 +29,8 @@ function classifyContext(metrics) {
   const url = metrics.url || "";
   const domain = domainFromUrl(url);
   const text = `${metrics.pageTitle} ${metrics.contextSample} ${metrics.pageTextSample}`.toLowerCase();
-  const isDecisionOsSurface =
-    domain.includes("nudge-frontend") || domain.includes("decisionos") || domain.includes("vercel.app");
+  const isNudgeSurface =
+    domain.includes("nudge-frontend") || domain.includes("nudge") || domain.includes("vercel.app");
 
   const isCoding = matchesContext("coding", domain, text);
   const isWatching = metrics.hasVideo || matchesContext("watching", domain, text);
@@ -60,7 +62,7 @@ function classifyContext(metrics) {
     category = "learning";
     evidence.push("Learning context signal");
     confidence = 0.7;
-  } else if (!isDecisionOsSurface && includesAny(text, ["article", "research", "blog", "paper", "report"])) {
+  } else if (!isNudgeSurface && includesAny(text, ["article", "research", "blog", "paper", "report"])) {
     activityType = "reading";
     category = "consuming_content";
     confidence = 0.52;
@@ -82,54 +84,96 @@ function detectIssue(session, metrics, context) {
     return null;
   }
 
+  const pauseFactor = clamp(metrics.pauseDurationMs / 22000);
+  const idleFactor = clamp(metrics.idleDurationMs / 45000);
+  const tabFactor = clamp(metrics.tabSwitchesDelta / 3);
+  const activityVariance = clamp(
+    Math.abs(metrics.typingSpeed - (session.lastMetrics?.typingSpeed || 0)) / 1.2 + metrics.scrollBursts / 10
+  );
+
+  const progressSignal = clamp((metrics.keystrokesDelta + metrics.scrollDistance / 400) / 8);
+  const lowProgressFactor = clamp(1 - progressSignal);
+
+  const procrastinationScore = tabFactor * 0.45 + activityVariance * 0.35 + lowProgressFactor * 0.2;
+  const distractionScore = idleFactor * 0.7 + pauseFactor * 0.3;
+  const focusPenalty = procrastinationScore * 0.45 + distractionScore * 0.55;
+  const focusScore = Math.round(Math.max(0, Math.min(100, 100 - focusPenalty * 85)));
+
+  const diagnostics = {
+    procrastinationScore: Number(procrastinationScore.toFixed(2)),
+    distractionScore: Number(distractionScore.toFixed(2)),
+    focusScore,
+    pauseDurationMs: metrics.pauseDurationMs,
+    idleDurationMs: metrics.idleDurationMs,
+    repeatedActions: metrics.repeatedActions,
+    tabSwitchesDelta: metrics.tabSwitchesDelta
+  };
+
+  const inactivityStrict =
+    metrics.pauseDurationMs >= STRICT_INACTIVITY_MS &&
+    metrics.idleDurationMs >= STRICT_INACTIVITY_MS &&
+    metrics.keystrokesDelta === 0 &&
+    metrics.scrollDistance === 0 &&
+    metrics.tabSwitchesDelta === 0;
+
+  if (inactivityStrict) {
+    diagnostics.distractionScore = Math.max(diagnostics.distractionScore, 0.92);
+    diagnostics.focusScore = Math.min(diagnostics.focusScore, 28);
+
+    return {
+      type: "inactivity",
+      strategy: "inactivity_strict",
+      displayType: "Inactivity",
+      severity: "high",
+      score: Number(diagnostics.distractionScore.toFixed(2)),
+      reason: "You've been inactive for 60 seconds.",
+      diagnostics
+    };
+  }
+
   if (context.activityType === "none_detected") {
     return null;
+  }
+
+  const noFreshActivity =
+    metrics.keystrokesDelta === 0 && metrics.scrollDistance === 0 && metrics.tabSwitchesDelta === 0;
+
+  if (noFreshActivity && metrics.idleDurationMs < STRICT_INACTIVITY_MS) {
+    return null;
+  }
+
+  if (metrics.idleDurationMs > STRICT_INACTIVITY_MS) {
+    return {
+      type: "distraction",
+      displayType: "Distraction",
+      score: diagnostics.distractionScore,
+      severity: severityFromScore(diagnostics.distractionScore),
+      reason: "No activity detected for an extended stretch.",
+      diagnostics
+    };
   }
 
   const meaningfulActivity =
     session.aggregate.totalKeystrokes >= 8 ||
     session.aggregate.totalScrollDistance >= 1000 ||
-    metrics.timeOnTaskMs > 45000;
+    metrics.timeOnTaskMs > 30000;
 
   if (!meaningfulActivity) {
     return null;
   }
 
-  const pauseFactor = clamp(metrics.pauseDurationMs / 22000);
-  const idleFactor = clamp(metrics.idleDurationMs / 30000);
-  const repeatFactor = clamp(metrics.repeatedActions / 8);
-  const deletionFactor = clamp(metrics.deletionRate * 1.8);
-  const retriesFactor = clamp(metrics.repeatedEdits / 7);
-  const tabFactor = clamp(metrics.tabSwitchesDelta / 3);
-  const scrollBurstFactor = clamp(metrics.scrollBursts / 12);
-  const lowTypingFactor = clamp((0.8 - metrics.typingSpeed) / 0.8);
-  const slowProgress = metrics.timeOnTaskMs > 150000 && metrics.typingSpeed < 0.4 ? clamp(metrics.timeOnTaskMs / 420000) : 0;
-
-  const confusionScore =
-    pauseFactor * 0.35 + repeatFactor * 0.25 + retriesFactor * 0.2 + deletionFactor * 0.2;
-  const distractionScore =
-    tabFactor * 0.35 + idleFactor * 0.35 + scrollBurstFactor * 0.2 + lowTypingFactor * 0.1;
-  const inefficiencyScore =
-    slowProgress * 0.4 + repeatFactor * 0.35 + clamp(metrics.scrollSpeed / 1600) * 0.15 + lowTypingFactor * 0.1;
-
   const candidates = [
     {
-      type: "confusion",
-      score: confusionScore,
-      threshold: 0.62,
-      reason: `Repeated retries plus pauses suggest you are stuck while ${context.activityType}.`
+      type: "procrastination",
+      score: procrastinationScore,
+      threshold: 0.56,
+      reason: "You switched contexts multiple times recently. You may be procrastinating."
     },
     {
       type: "distraction",
       score: distractionScore,
-      threshold: 0.56,
-      reason: `Idle time and context switches suggest attention drift during ${context.activityType}.`
-    },
-    {
-      type: "inefficiency",
-      score: inefficiencyScore,
       threshold: 0.58,
-      reason: `Current behavior suggests low-return effort for this ${context.activityType} flow.`
+      reason: "No activity trend suggests attention drift. Are you still working?"
     }
   ].sort((a, b) => b.score - a.score);
 
@@ -140,18 +184,11 @@ function detectIssue(session, metrics, context) {
 
   return {
     type: top.type,
+    displayType: top.type === "procrastination" ? "Procrastination" : "Distraction",
     severity: severityFromScore(top.score),
     score: Number(top.score.toFixed(2)),
     reason: top.reason,
-    diagnostics: {
-      confusionScore: Number(confusionScore.toFixed(2)),
-      distractionScore: Number(distractionScore.toFixed(2)),
-      inefficiencyScore: Number(inefficiencyScore.toFixed(2)),
-      pauseDurationMs: metrics.pauseDurationMs,
-      idleDurationMs: metrics.idleDurationMs,
-      repeatedActions: metrics.repeatedActions,
-      tabSwitchesDelta: metrics.tabSwitchesDelta
-    }
+    diagnostics
   };
 }
 
@@ -162,20 +199,31 @@ function buildSignal(issue) {
 
   return {
     issueType: issue.type,
+    issueDisplayType: issue.displayType || humanizeIssue(issue.type),
     issueSeverity: issue.severity,
-    confusionScore: issue.diagnostics?.confusionScore || 0,
+    statusLabel:
+      issue.type === "inactivity"
+        ? "Inactivity detected"
+        : issue.type === "distraction"
+          ? "Distraction detected"
+          : "Procrastination detected",
+    procrastinationScore: issue.diagnostics?.procrastinationScore || 0,
     distractionScore: issue.diagnostics?.distractionScore || 0,
-    inefficiencyScore: issue.diagnostics?.inefficiencyScore || 0
+    focusScore: issue.diagnostics?.focusScore || 72,
+    focusImprovementPct: 0
   };
 }
 
 function emptySignal() {
   return {
     issueType: null,
+    issueDisplayType: null,
     issueSeverity: null,
-    confusionScore: 0,
+    statusLabel: "Live monitoring",
+    procrastinationScore: 0,
     distractionScore: 0,
-    inefficiencyScore: 0
+    focusScore: 72,
+    focusImprovementPct: 0
   };
 }
 
@@ -231,6 +279,10 @@ function numberOrZero(value) {
 
 function includesAny(text, tokens) {
   return tokens.some((token) => text.includes(token));
+}
+
+function humanizeIssue(issueType) {
+  return String(issueType || "issue").replaceAll("_", " ");
 }
 
 export { buildSignal, classifyContext, detectIssue, emptyContext, emptySignal, normalizeMetrics };

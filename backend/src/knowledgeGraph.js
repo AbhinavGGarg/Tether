@@ -31,187 +31,122 @@ const CONTEXT_PROFILES = {
   }
 };
 
+const SHARED_ACTION_PAYLOADS = {
+  lock_in_2m: "Start a 2-minute focus sprint and avoid context switching.",
+  refocus_timer: "Run a 60-second single-task refocus sprint.",
+  break_steps: "Break this into 3 tiny steps and do step one now.",
+  try_new_approach: "Switch strategy and test one new approach.",
+  short_break: "Take a short reset, then return with one clear objective.",
+  resume_task: "Resume now and complete one concrete next step.",
+  ignore: "Ignore for now. Monitoring will continue."
+};
+
 const INTERVENTION_LIBRARY = {
   coding: {
-    confusion: {
-      title: "Stuck While Coding",
-      message: "You paused and retried repeatedly. A small reset can unblock you.",
-      nextAction: "Write one tiny failing case, then fix only that path.",
-      actionPayloads: {
-        show_fix: "Use smallest-case debugging: input -> expected output -> first failing line.",
-        give_hint: "Start with one edge case and prove it before scaling up.",
-        refocus: "Run a 90-second single-tab sprint on one bug.",
-        summarize: "Summarize bug, expected output, and next line to change."
-      }
+    procrastination: {
+      title: "Procrastination Pattern Detected",
+      message: "You are switching context often and delaying progress.",
+      nextAction: "Choose one coding objective and stay on it for 2 minutes.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
     distraction: {
-      title: "Focus Drift During Coding",
-      message: "Frequent tab changes are breaking your coding momentum.",
-      nextAction: "Set one micro-goal and finish it before switching context.",
-      actionPayloads: {
-        show_fix: "Keep one task tab and one reference tab only.",
-        give_hint: "Pick one function and complete it end-to-end first.",
-        refocus: "Start a 90-second focus sprint now.",
-        summarize: "Write one coding objective for the next 90 seconds."
-      }
+      title: "Distraction Detected",
+      message: "Your activity dropped and attention appears to be drifting.",
+      nextAction: "Lock in and complete one task before switching tabs.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
-    inefficiency: {
-      title: "Inefficient Edit Loop",
-      message: "You are editing repeatedly with low forward progress.",
-      nextAction: "Pause and choose one clear next action before coding more.",
-      actionPayloads: {
-        show_fix: "Plan first: input shape, logic path, edge case handling.",
-        give_hint: "One complete pass beats multiple partial rewrites.",
-        refocus: "Stop typing for 20 seconds and commit to one planned step.",
-        summarize: "Summarize your immediate next action in one line."
-      }
+    inactivity: {
+      title: "Distraction / Inactivity",
+      message: "You have been inactive for 60 seconds.",
+      nextAction: "Get back in for 2 minutes to regain momentum.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     }
   },
   writing: {
-    confusion: {
-      title: "Clarity Dip Detected",
-      message: "Your writing flow looks stuck and uncertain.",
-      nextAction: "Rewrite one sentence as subject + action + outcome.",
-      actionPayloads: {
-        show_fix: "Write a one-line thesis, then align every sentence to it.",
-        give_hint: "Lead with one clear claim before supporting details.",
-        refocus: "Draft two new sentences without editing.",
-        summarize: "Summarize this paragraph’s job in one sentence."
-      }
+    procrastination: {
+      title: "Procrastination Pattern Detected",
+      message: "Context switching is disrupting your writing flow.",
+      nextAction: "Commit to one paragraph for the next 2 minutes.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
     distraction: {
-      title: "Writing Focus Drift",
-      message: "Context switching is reducing your writing momentum.",
-      nextAction: "Commit to 90 seconds of uninterrupted drafting.",
-      actionPayloads: {
-        show_fix: "Disable side tasks and keep cursor in one document.",
-        give_hint: "Momentum first, polish second.",
-        refocus: "Start a 90-second no-edit sprint.",
-        summarize: "Summarize what this paragraph must accomplish."
-      }
+      title: "Distraction Detected",
+      message: "Your writing activity slowed and attention appears to drift.",
+      nextAction: "Refocus and finish one sentence block now.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
-    inefficiency: {
-      title: "Over-Editing Pattern",
-      message: "You may be polishing too early instead of finishing ideas.",
-      nextAction: "Separate drafting and editing into short passes.",
-      actionPayloads: {
-        show_fix: "Use a 60s draft pass followed by a 30s edit pass.",
-        give_hint: "Finish ideas fully, then improve wording.",
-        refocus: "Switch to draft-only mode for one minute.",
-        summarize: "Summarize the key point before editing style."
-      }
+    inactivity: {
+      title: "Distraction / Inactivity",
+      message: "You have been inactive for 60 seconds.",
+      nextAction: "Get back in for 2 minutes to regain momentum.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     }
   },
   studying: {
-    confusion: {
-      title: "Comprehension Friction",
-      message: "This section may not be sticking yet.",
-      nextAction: "Summarize from memory in one sentence.",
-      actionPayloads: {
-        show_fix: "Read, close page, recall one key idea without looking.",
-        give_hint: "If recall fails, reread heading and first sentence only.",
-        refocus: "Take 20 seconds and capture one takeaway.",
-        summarize: "Summarize what you learned in plain language."
-      }
+    procrastination: {
+      title: "Procrastination Pattern Detected",
+      message: "Your study session shows repeated context switching.",
+      nextAction: "Pick one section and stay on it for 2 minutes.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
     distraction: {
-      title: "Study Attention Drift",
-      message: "Your attention appears to be drifting from the task.",
-      nextAction: "Define one question this page should answer.",
-      actionPayloads: {
-        show_fix: "Use question-led reading to stay task-focused.",
-        give_hint: "Set objective before reading the next section.",
-        refocus: "Run a 60-second focused recall sprint.",
-        summarize: "Summarize your current study objective."
-      }
+      title: "Distraction Detected",
+      message: "Attention drift is reducing your study momentum.",
+      nextAction: "Refocus and capture one key takeaway now.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
-    inefficiency: {
-      title: "Low-Return Study Loop",
-      message: "You may be consuming without extracting useful insight.",
-      nextAction: "Capture two practical takeaways now.",
-      actionPayloads: {
-        show_fix: "Convert passive reading into one Q&A from memory.",
-        give_hint: "Extraction beats rereading for retention.",
-        refocus: "Pause and write two bullet takeaways.",
-        summarize: "Summarize one idea and one next action."
-      }
+    inactivity: {
+      title: "Distraction / Inactivity",
+      message: "You have been inactive for 60 seconds.",
+      nextAction: "Get back in for 2 minutes to regain momentum.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     }
   },
   watching: {
-    confusion: {
-      title: "Passive Watching Detected",
-      message: "You may be watching without enough retention.",
-      nextAction: "Pause and write one sentence from the last 2 minutes.",
-      actionPayloads: {
-        show_fix: "Checkpoint each concept with a one-line note.",
-        give_hint: "Pause briefly after each key point.",
-        refocus: "Commit to 3 focused minutes or intentionally switch.",
-        summarize: "Summarize the last segment in one sentence."
-      }
+    procrastination: {
+      title: "Procrastination Pattern Detected",
+      message: "You are watching without consistent task engagement.",
+      nextAction: "Decide the next concrete action and execute it now.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
     distraction: {
-      title: "Viewing Focus Drift",
-      message: "Switching behavior is increasing during content consumption.",
-      nextAction: "Decide intentionally: continue now or switch tasks.",
-      actionPayloads: {
-        show_fix: "Choose one path now: continue for 3 minutes or close it.",
-        give_hint: "Intentional choices beat accidental scrolling.",
-        refocus: "Set a 3-minute focus timer.",
-        summarize: "Summarize why this content matters right now."
-      }
+      title: "Distraction Detected",
+      message: "Attention drift is increasing during content viewing.",
+      nextAction: "Refocus and extract one clear takeaway now.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
-    inefficiency: {
-      title: "Low-Return Consumption",
-      message: "You may be consuming content without extracting value.",
-      nextAction: "Capture two actionable takeaways before continuing.",
-      actionPayloads: {
-        show_fix: "Turn each segment into one concrete decision.",
-        give_hint: "Ask what you will do differently after this.",
-        refocus: "Pause and record one action item.",
-        summarize: "Summarize one actionable takeaway."
-      }
+    inactivity: {
+      title: "Distraction / Inactivity",
+      message: "You have been inactive for 60 seconds.",
+      nextAction: "Get back in for 2 minutes to regain momentum.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     }
   },
   reading: {
-    confusion: {
-      title: "Reading Friction Spotted",
-      message: "You may be rereading without solid comprehension.",
-      nextAction: "Paraphrase this section in one sentence.",
-      actionPayloads: {
-        show_fix: "Reread heading + first sentence, then paraphrase.",
-        give_hint: "Find the main claim before details.",
-        refocus: "Set one question this page should answer.",
-        summarize: "Summarize the key idea in plain language."
-      }
+    procrastination: {
+      title: "Procrastination Pattern Detected",
+      message: "You are switching context and slowing page progress.",
+      nextAction: "Stay on one objective for the next 2 minutes.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
     distraction: {
-      title: "Browsing Drift Detected",
-      message: "Scrolling and switching behavior have increased.",
-      nextAction: "Define one objective for this page.",
-      actionPayloads: {
-        show_fix: "Question-led reading keeps browsing purposeful.",
-        give_hint: "Keep one objective visible while reading.",
-        refocus: "Do a 60-second objective-first pass.",
-        summarize: "Summarize why this page matters to your goal."
-      }
+      title: "Distraction Detected",
+      message: "Reading momentum dropped and focus appears to drift.",
+      nextAction: "Refocus and capture one insight from this page.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     },
-    inefficiency: {
-      title: "Low Progress Pattern",
-      message: "You may be consuming information without extraction.",
-      nextAction: "Write one insight and one next action.",
-      actionPayloads: {
-        show_fix: "Use one insight + one action per page.",
-        give_hint: "Extraction beats passive consumption.",
-        refocus: "Pause and capture one concrete insight.",
-        summarize: "Summarize one insight and one action item."
-      }
+    inactivity: {
+      title: "Distraction / Inactivity",
+      message: "You have been inactive for 60 seconds.",
+      nextAction: "Get back in for 2 minutes to regain momentum.",
+      actionPayloads: SHARED_ACTION_PAYLOADS
     }
   }
 };
 
 function getInterventionTemplate(activityType, issueType) {
   const byActivity = INTERVENTION_LIBRARY[activityType] || INTERVENTION_LIBRARY.reading;
-  return byActivity[issueType] || INTERVENTION_LIBRARY.reading[issueType] || INTERVENTION_LIBRARY.reading.confusion;
+  return byActivity[issueType] || INTERVENTION_LIBRARY.reading[issueType] || INTERVENTION_LIBRARY.reading.distraction;
 }
 
 export { CONTEXT_PROFILES, INTERVENTION_LIBRARY, getInterventionTemplate };

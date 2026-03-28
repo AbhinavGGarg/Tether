@@ -1,16 +1,19 @@
 import { v4 as uuidv4 } from "uuid";
 
 const ISSUE_COOLDOWN_MS = {
-  confusion: 120000,
-  distraction: 90000,
-  inefficiency: 150000
+  procrastination: 90000,
+  distraction: 80000,
+  inactivity: 90000
 };
 
 const ACTION_SNOOZE_MS = {
-  show_fix: 60000,
-  give_hint: 60000,
-  refocus: 180000,
-  summarize: 120000
+  lock_in_2m: 180000,
+  refocus_timer: 180000,
+  break_steps: 90000,
+  try_new_approach: 90000,
+  short_break: 120000,
+  ignore: 180000,
+  resume_task: 60000
 };
 
 class SessionStore {
@@ -30,9 +33,9 @@ class SessionStore {
       timeline: [],
       contextsSeen: {},
       issueCounters: {
-        confusion: 0,
+        procrastination: 0,
         distraction: 0,
-        inefficiency: 0
+        inactivity: 0
       },
       aggregate: {
         totalKeystrokes: 0,
@@ -122,7 +125,7 @@ class SessionStore {
 
   canEmitIntervention(sessionId, issueType) {
     const session = this.getSession(sessionId);
-    if (!session) {
+    if (!session || !issueType) {
       return false;
     }
 
@@ -132,9 +135,7 @@ class SessionStore {
       return false;
     }
 
-    const unresolved = session.interventions.some(
-      (entry) => !entry.userAction && now - entry.ts < 4 * 60 * 1000
-    );
+    const unresolved = session.interventions.some((entry) => !entry.userAction && now - entry.ts < 3 * 60 * 1000);
     if (unresolved) {
       return false;
     }
@@ -184,18 +185,15 @@ class SessionStore {
 
     target.userAction = action;
     target.respondedAt = Date.now();
-    target.applied = action === "refocus";
-
-    if (action === "summarize") {
-      target.generatedSummary = `Summary: ${target.message} Next step: ${target.nextAction}`;
-    }
-
-    if (action === "refocus") {
-      simulateImprovement(session);
-    }
+    target.applied = ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(action);
 
     if (ACTION_SNOOZE_MS[action] && target.type) {
       session.snoozedByType[target.type] = Date.now() + ACTION_SNOOZE_MS[action];
+    }
+
+    const improvementPct = simulateImprovement(session, target.type, action);
+    if (improvementPct > 0) {
+      target.improvementNote = `Focus improved by ${improvementPct}%`;
     }
 
     addTimeline(session, "user_action", `User selected ${actionLabel(action)}`, target.title);
@@ -224,9 +222,14 @@ class SessionStore {
     const endedAt = session.endedAt || Date.now();
     const durationMs = endedAt - session.startedAt;
 
+    const issueWeight =
+      (session.issueCounters.procrastination || 0) * 3000 +
+      (session.issueCounters.distraction || 0) * 3500 +
+      (session.issueCounters.inactivity || 0) * 3000;
+
     const timeWastedMs = Math.min(
       durationMs,
-      session.aggregate.totalIdleMs + session.aggregate.repeatedActionBursts * 4000
+      session.aggregate.totalIdleMs + session.aggregate.repeatedActionBursts * 4000 + issueWeight
     );
 
     const contextBreakdown = Object.entries(session.contextsSeen)
@@ -234,9 +237,12 @@ class SessionStore {
       .sort((a, b) => b.count - a.count)
       .slice(0, 6);
 
-    const resolvedCount = session.interventions.filter((entry) => entry.userAction === "refocus").length;
+    const successfulActions = session.interventions.filter((entry) =>
+      ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(entry.userAction)
+    ).length;
+
     const interventionEffectiveness = session.interventions.length
-      ? Number((resolvedCount / session.interventions.length).toFixed(2))
+      ? Number((successfulActions / session.interventions.length).toFixed(2))
       : 0;
 
     return {
@@ -264,17 +270,24 @@ function computeBehaviorSnapshot(session) {
 
   const focusScore = Math.max(
     0,
-    100 - Math.min(80, avgIdleMs / 600 + session.aggregate.totalTabSwitches * 2 + session.issueCounters.distraction * 4)
+    100 -
+      Math.min(
+        85,
+        avgIdleMs / 550 +
+          session.aggregate.totalTabSwitches * 2 +
+          (session.issueCounters.distraction || 0) * 4 +
+          (session.issueCounters.procrastination || 0) * 3
+      )
   );
 
   const momentumScore = Math.max(
     0,
-    100 - Math.min(75, session.issueCounters.inefficiency * 6 + session.aggregate.repeatedActionBursts * 3)
+    100 - Math.min(80, session.aggregate.repeatedActionBursts * 3 + (session.issueCounters.inactivity || 0) * 4)
   );
 
   const clarityScore = Math.max(
     0,
-    100 - Math.min(75, session.issueCounters.confusion * 7 + session.issueCounters.distraction * 2)
+    100 - Math.min(80, (session.issueCounters.inactivity || 0) * 6 + (session.issueCounters.distraction || 0) * 3)
   );
 
   return {
@@ -292,34 +305,67 @@ function buildImprovementSuggestions(session, contextBreakdown) {
     suggestions.push(`Primary context: ${topContext}. Set one objective before each work block.`);
   }
 
+  if ((session.issueCounters.procrastination || 0) > 0) {
+    suggestions.push("Use short single-task sprints to reduce context switching.");
+  }
+
   if ((session.issueCounters.distraction || 0) > 0) {
-    suggestions.push("Use 90-second single-task focus sprints when drift appears.");
+    suggestions.push("When distraction appears, run a short lock-in sprint immediately.");
   }
 
-  if ((session.issueCounters.confusion || 0) > 0) {
-    suggestions.push("When stuck, summarize what you know and what is missing in one sentence.");
-  }
-
-  if ((session.issueCounters.inefficiency || 0) > 0) {
-    suggestions.push("Switch from reactive edits to one clear next action before acting.");
+  if ((session.issueCounters.inactivity || 0) > 0) {
+    suggestions.push("After long idle periods, resume with one concrete next action.");
   }
 
   if (suggestions.length === 0) {
-    suggestions.push("Strong session. Keep using short checkpoints to preserve momentum.");
+    suggestions.push("Strong session. Keep using quick checkpoints to preserve momentum.");
   }
 
   return suggestions.slice(0, 4);
 }
 
-function simulateImprovement(session) {
-  session.lastSignal = {
-    ...session.lastSignal,
-    issueType: null,
-    issueSeverity: null,
-    confusionScore: Number(Math.max(0, (session.lastSignal.confusionScore || 0) - 0.25).toFixed(2)),
-    distractionScore: Number(Math.max(0, (session.lastSignal.distractionScore || 0) - 0.25).toFixed(2)),
-    inefficiencyScore: Number(Math.max(0, (session.lastSignal.inefficiencyScore || 0) - 0.25).toFixed(2))
+function simulateImprovement(session, issueType, action) {
+  const next = { ...(session.lastSignal || {}) };
+
+  const improvements = {
+    lock_in_2m: 40,
+    refocus_timer: 40,
+    break_steps: 25,
+    try_new_approach: 22,
+    short_break: 18,
+    resume_task: 20
   };
+
+  const scoreDrop = {
+    lock_in_2m: 0.4,
+    refocus_timer: 0.4,
+    break_steps: 0.25,
+    try_new_approach: 0.22,
+    short_break: 0.18,
+    resume_task: 0.2
+  };
+
+  const pct = improvements[action] || 0;
+  const drop = scoreDrop[action] || 0;
+
+  next.procrastinationScore = Number(Math.max(0, (next.procrastinationScore || 0) - drop).toFixed(2));
+  next.distractionScore = Number(Math.max(0, (next.distractionScore || 0) - drop).toFixed(2));
+  next.focusScore = Math.min(100, Math.round((next.focusScore || 65) + pct));
+  next.focusImprovementPct = pct;
+
+  const maxScore = Math.max(next.procrastinationScore || 0, next.distractionScore || 0);
+
+  if (!issueType || issueType === next.issueType) {
+    if (maxScore < 0.45) {
+      next.issueType = null;
+      next.issueDisplayType = null;
+      next.issueSeverity = null;
+      next.statusLabel = "Live monitoring";
+    }
+  }
+
+  session.lastSignal = next;
+  return pct;
 }
 
 function addTimeline(session, eventType, label, details) {
@@ -337,10 +383,13 @@ function addTimeline(session, eventType, label, details) {
 function emptySignal() {
   return {
     issueType: null,
+    issueDisplayType: null,
     issueSeverity: null,
-    confusionScore: 0,
+    statusLabel: "Live monitoring",
+    procrastinationScore: 0,
     distractionScore: 0,
-    inefficiencyScore: 0
+    focusScore: 72,
+    focusImprovementPct: 0
   };
 }
 
@@ -357,29 +406,29 @@ function emptyContext() {
 }
 
 function normalizeAction(action) {
-  const mapping = {
-    show_suggestion: "show_fix",
-    try_action: "refocus",
-    ignore: "summarize"
-  };
-
-  const resolved = mapping[action] || action;
-  if (["show_fix", "give_hint", "refocus", "summarize"].includes(resolved)) {
-    return resolved;
+  if (
+    ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "short_break", "resume_task", "ignore"].includes(
+      action
+    )
+  ) {
+    return action;
   }
 
-  return "refocus";
+  return "resume_task";
 }
 
 function actionLabel(action) {
   const labels = {
-    show_fix: "Show Fix",
-    give_hint: "Give Hint",
-    refocus: "Refocus",
-    summarize: "Summarize"
+    lock_in_2m: "Lock In (2 min focus)",
+    refocus_timer: "Refocus (Start 60s timer)",
+    break_steps: "Break into Steps",
+    try_new_approach: "Try New Approach",
+    short_break: "Take Short Break",
+    resume_task: "Resume Task",
+    ignore: "Ignore"
   };
 
-  return labels[action] || "Refocus";
+  return labels[action] || "Resume Task";
 }
 
 function capitalize(value) {

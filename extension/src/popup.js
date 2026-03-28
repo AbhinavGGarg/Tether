@@ -85,9 +85,7 @@ function render(state) {
   const risk = Math.round(
     Math.max(
       signal.procrastinationScore || 0,
-      signal.distractionScore || 0,
-      signal.lowFocusScore || 0,
-      signal.inefficiencyScore || 0
+      signal.distractionScore || 0
     ) * 100
   );
 

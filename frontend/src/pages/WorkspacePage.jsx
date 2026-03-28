@@ -66,8 +66,6 @@ function WorkspacePage() {
     statusLabel: "Live monitoring",
     procrastinationScore: 0,
     distractionScore: 0,
-    lowFocusScore: 0,
-    inefficiencyScore: 0,
     focusScore: 72,
     focusImprovementPct: 0
   });
@@ -207,8 +205,6 @@ function WorkspacePage() {
         statusLabel: "Live monitoring",
         procrastinationScore: 0,
         distractionScore: 0,
-        lowFocusScore: 0,
-        inefficiencyScore: 0,
         focusScore: 72,
         focusImprovementPct: 0
       });
@@ -505,11 +501,11 @@ function WorkspacePage() {
         hasSessionProgress &&
         inactiveMs < modeConfig.inactivityMs &&
         lowProductivityMs > modeConfig.lostFocusMs &&
-        (signal.lowFocusScore > 0.44 || signal.inefficiencyScore > 0.44);
+        (signal.procrastinationScore > 0.44 || signal.distractionScore > 0.44);
 
       const userReturned = inactiveMs < 6000 && lowProductivityMs < 10000;
       const productivityRecovered =
-        telemetry.typingSpeed > 0.28 && signal.lowFocusScore < 0.4 && signal.inefficiencyScore < 0.4;
+        telemetry.typingSpeed > 0.28 && signal.procrastinationScore < 0.4 && signal.distractionScore < 0.4;
 
       if (!smartReminderRef.current.active) {
         if (forgotSessionDetected || lostFocusDetected) {
@@ -613,8 +609,8 @@ function WorkspacePage() {
     addSmartNudgeEvent,
     connected,
     sessionId,
-    signal.inefficiencyScore,
-    signal.lowFocusScore,
+    signal.procrastinationScore,
+    signal.distractionScore,
     smartNudgePermission,
     smartNudges.enabled,
     smartNudges.mode,
@@ -841,9 +837,7 @@ function handleInterventionAction(intervention, action) {
   const behaviorRiskPct = Math.round(
     Math.max(
       signal.procrastinationScore || 0,
-      signal.distractionScore || 0,
-      signal.lowFocusScore || 0,
-      signal.inefficiencyScore || 0
+      signal.distractionScore || 0
     ) * 100
   );
 
@@ -882,7 +876,7 @@ function handleInterventionAction(intervention, action) {
         <>
           <section className="panel landing-hero">
             <div className="landing-hero-copy">
-              <h2>Real-time intervention for procrastination, distraction, and low focus</h2>
+              <h2>Real-time intervention for procrastination, distraction, and inactivity</h2>
               <p>
                 Nudge observes live behavior patterns and intervenes when momentum drops. It helps students and builders
                 recover focus in the moment instead of after performance already declines.
@@ -920,7 +914,7 @@ function handleInterventionAction(intervention, action) {
                 after results drop. Nudge acts during the session.
               </p>
               <ul className="landing-list">
-                <li>Detects inactivity, distraction, low focus, and inefficiency in real time.</li>
+                <li>Detects inactivity, distraction, and procrastination in real time.</li>
                 <li>Adapts to page context across coding, reading, writing, and browsing.</li>
                 <li>Pushes targeted actions like lock-in timers and recovery prompts.</li>
               </ul>
@@ -935,7 +929,7 @@ function handleInterventionAction(intervention, action) {
                 </div>
                 <div>
                   <strong>2. Detect</strong>
-                  <p>Classify risk patterns and trigger strict inactivity detection at 90 seconds.</p>
+                  <p>Classify risk patterns and trigger strict inactivity detection at 60 seconds.</p>
                 </div>
                 <div>
                   <strong>3. Intervene</strong>
@@ -1411,9 +1405,7 @@ function resolveActionText(intervention, action, updatedIntervention) {
 function estimateWastedMinutes(signal, telemetry) {
   const friction = Math.max(
     signal.procrastinationScore || 0,
-    signal.distractionScore || 0,
-    signal.lowFocusScore || 0,
-    signal.inefficiencyScore || 0
+    signal.distractionScore || 0
   );
 
   const base = Math.max(2, Math.round((telemetry.timeOnTaskMs || 0) / 60000));
@@ -1446,9 +1438,7 @@ function computeGradesRiskState({
       : `baseline ${fallbackGrade} across all courses`;
   const behaviorRisk = Math.max(
     signal.procrastinationScore || 0,
-    signal.distractionScore || 0,
-    signal.lowFocusScore || 0,
-    signal.inefficiencyScore || 0
+    signal.distractionScore || 0
   );
   const wastedMinutes = estimateWastedMinutes(signal, telemetry);
   const wastedRisk = clamp01(wastedMinutes / 18);
