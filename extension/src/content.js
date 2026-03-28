@@ -1,6 +1,7 @@
 const NUDGE_TAG = "nudge-extension-root";
 const NUDGE_DOCK_TAG = "nudge-extension-dock";
 const BRAND_NAME = "Tether";
+const LIVE_PAGE_SOURCE_URL = "https://nudge-frontend-ten.vercel.app/";
 const BLOCKED_MONITOR_PAGES = [
   { host: "accounts.google.com", pathPrefix: "/v3/signin" },
   { host: "accounts.google.com", pathPrefix: "/ServiceLogin" },
@@ -336,15 +337,16 @@ function createDock() {
   dock.setAttribute(
     "style",
     [
+      "all:initial",
       "position:fixed",
-      "right:10px",
-      "top:50%",
-      "transform:translateY(-50%)",
+      "right:14px",
+      "bottom:14px",
       "z-index:2147483645",
       "display:grid",
       "justify-items:end",
       "gap:8px",
-      "font-family:Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+      "font-family:Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+      "pointer-events:none"
     ].join(";")
   );
 
@@ -361,7 +363,8 @@ function createDock() {
       "box-shadow:0 14px 30px rgba(2,6,23,0.45)",
       "color:#e2e8f0",
       "font-size:12px",
-      "line-height:1.45"
+      "line-height:1.45",
+      "pointer-events:auto"
     ].join(";")
   );
 
@@ -378,7 +381,8 @@ function createDock() {
       "font-size:13px",
       "font-weight:700",
       "cursor:pointer",
-      "box-shadow:0 12px 24px rgba(2,6,23,0.45)"
+      "box-shadow:0 12px 24px rgba(2,6,23,0.45)",
+      "pointer-events:auto"
     ].join(";")
   );
   dockButton.textContent = `${BRAND_NAME} Live`;
@@ -400,6 +404,7 @@ function renderDock() {
   const idleSeconds = Math.floor((Date.now() - lastActivityTime) / 1000);
   const issueLabel = issueActive && currentIssue ? "Inactivity detected" : "No active issue";
   const lockLine = lockInRemainingSec > 0 ? `${lockInRemainingSec}s left in 2-minute lock-in.` : "";
+  const contextSnapshot = getContextSnapshot();
 
   dockButton.style.borderColor = issueActive ? "rgba(248,113,113,0.65)" : "rgba(14,165,233,0.45)";
   dockButton.style.color = issueActive ? "#fecaca" : "#bae6fd";
@@ -416,6 +421,11 @@ function renderDock() {
     ${lockLine ? `<div style="color:#86efac;margin-top:4px">${escapeHtml(lockLine)}</div>` : ""}
     ${lastActionNote ? `<div style="color:#86efac;margin-top:4px">${escapeHtml(lastActionNote)}</div>` : ""}
     <div style="margin-top:8px;color:#bfdbfe">${escapeHtml(detailedSummary)}</div>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(148,163,184,0.25)">
+      <div style="font-weight:700;color:#e2e8f0">Live Page Source</div>
+      <div style="color:#93c5fd;word-break:break-all;margin-top:2px">${escapeHtml(LIVE_PAGE_SOURCE_URL)}</div>
+      <div style="color:#cbd5e1;margin-top:4px">${escapeHtml(contextSnapshot.message)}</div>
+    </div>
     <div style="margin-top:8px;color:#94a3b8">
       ${BRAND_NAME} interventions appear automatically after ${Math.round(getInactivityThresholdMs() / 1000)}s inactivity on this current site.
     </div>
@@ -468,6 +478,11 @@ function createCenteredPopup() {
 
 function renderPopup() {
   if (!overlay || !overlayBody || !currentIssue || !issueActive) {
+    return;
+  }
+
+  if (!isCurrentPageActive()) {
+    hidePopup();
     return;
   }
 
@@ -573,8 +588,10 @@ function ensureUiPresence() {
     createCenteredPopup();
   }
   renderDock();
-  if (issueActive) {
+  if (issueActive && isCurrentPageActive()) {
     renderPopup();
+  } else if (!isCurrentPageActive()) {
+    hidePopup();
   }
 }
 
@@ -633,6 +650,43 @@ function buildPageKey(locationLike) {
   const host = String(locationLike?.hostname || "").toLowerCase();
   const path = String(locationLike?.pathname || "");
   return `${host}${path}`;
+}
+
+function getContextSnapshot() {
+  const host = String(window.location.hostname || "").toLowerCase();
+  const path = String(window.location.pathname || "").toLowerCase();
+  const hasEditable = hasEditableSurface();
+  const hasVideo = Boolean(document.querySelector("video"));
+
+  const learningHosts = [
+    "deltamath.com",
+    "classroom.google.com",
+    "khanacademy.org",
+    "canvas",
+    "schoology",
+    "quizlet.com",
+    "coursera.org",
+    "edx.org"
+  ];
+
+  const codingHosts = ["leetcode.com", "hackerrank.com", "replit.com", "codesandbox.io", "github.com"];
+  const writingHosts = ["docs.google.com", "notion.so", "overleaf.com", "medium.com", "substack.com"];
+  const watchingHosts = ["youtube.com", "udemy.com", "vimeo.com", "netflix.com"];
+
+  if (learningHosts.some((token) => host.includes(token))) {
+    return { supported: true, message: "Supported context detected: learning." };
+  }
+  if (codingHosts.some((token) => host.includes(token))) {
+    return { supported: true, message: "Supported context detected: problem solving." };
+  }
+  if (writingHosts.some((token) => host.includes(token)) || hasEditable) {
+    return { supported: true, message: "Supported context detected: writing." };
+  }
+  if (watchingHosts.some((token) => host.includes(token)) || hasVideo || path.includes("watch")) {
+    return { supported: true, message: "Supported context detected: consuming content." };
+  }
+
+  return { supported: false, message: "No supported context detected on this site yet." };
 }
 
 function extractWorkingText() {
