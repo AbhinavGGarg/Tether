@@ -137,8 +137,8 @@ function WorkspacePage() {
   }, [timeline, riskEvents, nudgeEvents]);
 
   const enrichedActiveIntervention = useMemo(
-    () => attachRiskToIntervention(activeIntervention, riskState, smartNudges),
-    [activeIntervention, riskState, smartNudges]
+    () => attachRiskToIntervention(activeIntervention, riskState, smartNudges, gradesInput.upcomingAssessments),
+    [activeIntervention, riskState, smartNudges, gradesInput.upcomingAssessments]
   );
 
   const addRiskTimelineEvent = useCallback((eventType, label, details) => {
@@ -1141,7 +1141,7 @@ function handleInterventionAction(intervention, action) {
                             />
                           </label>
                           <label className="risk-field">
-                            Date (optional)
+                            Date (recommended)
                             <input
                               type="date"
                               value={entry.date}
@@ -1509,7 +1509,7 @@ function computeGradesRiskState({
   };
 }
 
-function attachRiskToIntervention(intervention, riskState, smartNudges = null) {
+function attachRiskToIntervention(intervention, riskState, smartNudges = null, upcomingAssessments = []) {
   if (!intervention) {
     return null;
   }
@@ -1517,15 +1517,18 @@ function attachRiskToIntervention(intervention, riskState, smartNudges = null) {
   const whatBase = intervention.what || intervention.message || "";
   const whyBase = intervention.why || intervention.reason || "";
   const riskLine = `You are currently at ${riskState.level.toLowerCase()} risk based on your grade and session behavior.`;
+  const urgencyLine = buildAssessmentUrgencyLine(upcomingAssessments, intervention.type);
   const nudgeLine =
     smartNudges?.enabled
       ? `Smart Nudges is active (${smartNudges.mode}) and can re-engage you if you step away.`
       : "";
+  const nextActionLine = urgencyLine || intervention.nextAction;
 
   return {
     ...intervention,
-    what: whatBase.includes("currently at") ? whatBase : `${whatBase} ${riskLine}`.trim(),
-    message: `${whatBase} ${riskLine} ${nudgeLine}`.trim(),
+    what: whatBase.includes("currently at") ? whatBase : `${whatBase} ${riskLine} ${urgencyLine}`.trim(),
+    message: `${whatBase} ${riskLine} ${urgencyLine} ${nudgeLine}`.trim(),
+    nextAction: nextActionLine,
     why: whyBase.includes("grade") ? whyBase : `${whyBase} Current grade signal: ${riskState.gradeLabel}.`.trim()
   };
 }
@@ -1588,6 +1591,60 @@ function countUpcomingAssessments(assessments) {
     const date = String(entry?.date || "").trim();
     return Boolean(name || date);
   }).length;
+}
+
+function buildAssessmentUrgencyLine(assessments, issueType) {
+  if (issueType !== "distraction") {
+    return "";
+  }
+
+  const nearest = getNearestUpcomingAssessment(assessments);
+  if (!nearest) {
+    return "";
+  }
+
+  const target = nearest.name || "your assessment";
+  if (nearest.daysUntil === 0) {
+    return `You have ${target} today. Stop getting distracted and study for it now.`;
+  }
+  if (nearest.daysUntil === 1) {
+    return `You have ${target} tomorrow. Stop getting distracted and study for it now.`;
+  }
+  if (nearest.daysUntil <= 3) {
+    return `You have ${target} in ${nearest.daysUntil} days. Stay focused to finish prep on time.`;
+  }
+  return "";
+}
+
+function getNearestUpcomingAssessment(assessments) {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  const candidates = (assessments || [])
+    .map((entry) => {
+      const dateValue = String(entry?.date || "").trim();
+      if (!dateValue) {
+        return null;
+      }
+      const parsed = new Date(`${dateValue}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) {
+        return null;
+      }
+      const targetStart = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+      const daysUntil = Math.round((targetStart.getTime() - todayStart.getTime()) / 86400000);
+      if (daysUntil < 0) {
+        return null;
+      }
+      return {
+        name: String(entry?.name || "").trim(),
+        daysUntil,
+        ts: targetStart.getTime()
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+
+  return candidates[0] || null;
 }
 
 function formatDateForDisplay(value) {
