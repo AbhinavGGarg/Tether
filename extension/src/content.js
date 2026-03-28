@@ -9,9 +9,13 @@ let totalKeystrokes = 0;
 let previousText = "";
 let lastIntervention = null;
 let currentSignal = { issueType: null, issueSeverity: null, confusionScore: 0 };
+let isCollapsed = false;
+let isClosed = false;
 
 let overlay;
 let overlayBody;
+let overlayTitle;
+let collapseBtn;
 
 boot();
 
@@ -161,10 +165,21 @@ function createOverlay() {
   const title = document.createElement("strong");
   title.textContent = "Nudge Live";
   title.style.fontSize = "13px";
+  overlayTitle = title;
 
-  const closeBtn = document.createElement("button");
-  closeBtn.textContent = "x";
-  closeBtn.setAttribute(
+  const controls = document.createElement("div");
+  controls.setAttribute(
+    "style",
+    [
+      "display:flex",
+      "align-items:center",
+      "gap:8px"
+    ].join(";")
+  );
+
+  collapseBtn = document.createElement("button");
+  collapseBtn.textContent = "-";
+  collapseBtn.setAttribute(
     "style",
     [
       "background:transparent",
@@ -175,12 +190,37 @@ function createOverlay() {
       "line-height:1"
     ].join(";")
   );
+  collapseBtn.addEventListener("click", () => {
+    isCollapsed = !isCollapsed;
+    renderOverlay();
+  });
+
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "x";
+  closeBtn.setAttribute(
+    "style",
+    [
+      "background:transparent",
+      "color:#94a3b8",
+      "border:none",
+      "cursor:pointer",
+      "font-size:16px",
+      "line-height:1"
+    ].join(";")
+  );
   closeBtn.addEventListener("click", () => {
-    overlay.style.display = "none";
+    isClosed = true;
+    if (overlay) {
+      overlay.remove();
+    }
+    overlay = null;
+    overlayBody = null;
   });
 
   head.appendChild(title);
-  head.appendChild(closeBtn);
+  controls.appendChild(collapseBtn);
+  controls.appendChild(closeBtn);
+  head.appendChild(controls);
 
   overlayBody = document.createElement("div");
   overlayBody.style.padding = "10px 12px";
@@ -194,13 +234,33 @@ function createOverlay() {
 }
 
 function renderOverlay() {
-  if (!overlayBody) {
+  if (isClosed || !overlay || !overlayBody) {
     return;
   }
 
   const issueLabel = currentSignal.issueType
     ? `${currentSignal.issueType} (${currentSignal.issueSeverity || "low"})`
     : "No active issue";
+
+  overlay.style.width = isCollapsed ? "240px" : "320px";
+  overlay.style.maxWidth = "calc(100vw - 28px)";
+  if (overlayTitle) {
+    overlayTitle.textContent = isCollapsed ? "Nudge Live (Collapsed)" : "Nudge Live";
+  }
+  if (collapseBtn) {
+    collapseBtn.textContent = isCollapsed ? "+" : "-";
+  }
+
+  if (isCollapsed) {
+    overlayBody.innerHTML = `
+      <div style="display:grid;gap:4px">
+        <div><strong>Issue:</strong> ${escapeHtml(issueLabel)}</div>
+        <div><strong>Score:</strong> ${Math.round((currentSignal.confusionScore || 0) * 100)}%</div>
+        <div style="color:#94a3b8">Click + to expand</div>
+      </div>
+    `;
+    return;
+  }
 
   const interventionHtml = lastIntervention
     ? `
