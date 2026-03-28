@@ -16,6 +16,7 @@ let overlay;
 let overlayBody;
 let overlayTitle;
 let collapseBtn;
+let reopenChip;
 
 boot();
 
@@ -126,8 +127,9 @@ function publishMetrics() {
 }
 
 function createOverlay() {
-  if (document.getElementById(NUDGE_TAG)) {
-    return;
+  const existingOverlay = document.getElementById(NUDGE_TAG);
+  if (existingOverlay) {
+    existingOverlay.remove();
   }
 
   overlay = document.createElement("aside");
@@ -178,15 +180,18 @@ function createOverlay() {
   );
 
   collapseBtn = document.createElement("button");
-  collapseBtn.textContent = "-";
+  collapseBtn.textContent = "Collapse";
   collapseBtn.setAttribute(
     "style",
     [
-      "background:transparent",
-      "color:#94a3b8",
-      "border:none",
+      "background:#22d3ee",
+      "color:#082f49",
+      "border:1px solid #67e8f9",
+      "border-radius:8px",
+      "padding:4px 8px",
       "cursor:pointer",
-      "font-size:14px",
+      "font-size:12px",
+      "font-weight:700",
       "line-height:1"
     ].join(";")
   );
@@ -196,25 +201,26 @@ function createOverlay() {
   });
 
   const closeBtn = document.createElement("button");
-  closeBtn.textContent = "x";
+  closeBtn.textContent = "Close";
   closeBtn.setAttribute(
     "style",
     [
-      "background:transparent",
-      "color:#94a3b8",
-      "border:none",
+      "background:rgba(239,68,68,0.15)",
+      "color:#fecaca",
+      "border:1px solid rgba(248,113,113,0.45)",
+      "border-radius:8px",
+      "padding:4px 8px",
       "cursor:pointer",
-      "font-size:16px",
+      "font-size:12px",
       "line-height:1"
     ].join(";")
   );
   closeBtn.addEventListener("click", () => {
     isClosed = true;
     if (overlay) {
-      overlay.remove();
+      overlay.style.display = "none";
     }
-    overlay = null;
-    overlayBody = null;
+    showReopenChip();
   });
 
   head.appendChild(title);
@@ -230,6 +236,7 @@ function createOverlay() {
   overlay.appendChild(head);
   overlay.appendChild(overlayBody);
   document.documentElement.appendChild(overlay);
+  createReopenChip();
   renderOverlay();
 }
 
@@ -248,7 +255,7 @@ function renderOverlay() {
     overlayTitle.textContent = isCollapsed ? "Nudge Live (Collapsed)" : "Nudge Live";
   }
   if (collapseBtn) {
-    collapseBtn.textContent = isCollapsed ? "+" : "-";
+    collapseBtn.textContent = isCollapsed ? "Expand" : "Collapse";
   }
 
   if (isCollapsed) {
@@ -256,7 +263,7 @@ function renderOverlay() {
       <div style="display:grid;gap:4px">
         <div><strong>Issue:</strong> ${escapeHtml(issueLabel)}</div>
         <div><strong>Score:</strong> ${Math.round((currentSignal.confusionScore || 0) * 100)}%</div>
-        <div style="color:#94a3b8">Click + to expand</div>
+        <div style="color:#94a3b8">Click Expand to reopen details</div>
       </div>
     `;
     return;
@@ -302,6 +309,57 @@ function renderOverlay() {
         }
       );
     });
+  }
+}
+
+function createReopenChip() {
+  const existingChip = document.getElementById("nudge-reopen-chip");
+  if (existingChip) {
+    existingChip.remove();
+  }
+
+  reopenChip = document.createElement("button");
+  reopenChip.id = "nudge-reopen-chip";
+  reopenChip.textContent = "N";
+  reopenChip.setAttribute(
+    "style",
+    [
+      "position:fixed",
+      "right:14px",
+      "bottom:14px",
+      "z-index:2147483647",
+      "width:34px",
+      "height:34px",
+      "border-radius:999px",
+      "border:1px solid rgba(14,165,233,0.55)",
+      "background:rgba(2,6,23,0.95)",
+      "color:#67e8f9",
+      "font-weight:700",
+      "cursor:pointer",
+      "display:none"
+    ].join(";")
+  );
+  reopenChip.addEventListener("click", () => {
+    isClosed = false;
+    if (overlay) {
+      overlay.style.display = "block";
+    }
+    hideReopenChip();
+    renderOverlay();
+  });
+
+  document.documentElement.appendChild(reopenChip);
+}
+
+function showReopenChip() {
+  if (reopenChip) {
+    reopenChip.style.display = "block";
+  }
+}
+
+function hideReopenChip() {
+  if (reopenChip) {
+    reopenChip.style.display = "none";
   }
 }
 
