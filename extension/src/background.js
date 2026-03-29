@@ -150,6 +150,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "NUDGE_GET_GLOBAL_LIVE_STATE") {
+    getTetherEnabled()
+      .then((enabled) => {
+        sendResponse({
+          ok: true,
+          tetherEnabled: enabled,
+          state: buildGlobalLiveState(enabled)
+        });
+      })
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
   if (message.type === "NUDGE_ACTIVITY") {
     handleActivityMessage(message, sender)
       .then((payload) => sendResponse(payload))
@@ -1108,6 +1121,94 @@ function addTimeline(session, eventType, label, details) {
   session.timeline = session.timeline.slice(0, 50);
 }
 
+function buildGlobalLiveState(tetherEnabled) {
+  const sessions = [...tabSessions.values()];
+  const externalSessions = sessions.filter((session) => !isControlSurfaceDomain(session?.context?.domain || session?.url));
+  const candidates = externalSessions.filter(
+    (session) =>
+      Number(session?.aggregate?.totalKeystrokes || 0) > 0 ||
+      Number(session?.aggregate?.timeOnTaskMs || 0) > 0 ||
+      Boolean(session?.activity?.hasInteracted)
+  );
+
+  const recent = candidates.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))[0] || null;
+
+  const overall = externalSessions.reduce(
+    (acc, session) => {
+      acc.totalKeystrokes += Number(session?.aggregate?.totalKeystrokes || 0);
+      acc.totalTabSwitches += Number(session?.aggregate?.totalTabSwitches || 0);
+      acc.totalScrollDistance += Number(session?.aggregate?.totalScrollDistance || 0);
+      acc.totalIdleMs += Number(session?.aggregate?.totalIdleMs || 0);
+      acc.timeOnTaskMs += Number(session?.aggregate?.timeOnTaskMs || 0);
+      acc.totalDetections += Number(session?.aggregate?.totalDetections || 0);
+      acc.issueCounters.procrastination += Number(session?.issueCounters?.procrastination || 0);
+      acc.issueCounters.distraction += Number(session?.issueCounters?.distraction || 0);
+      acc.issueCounters.inactivity += Number(session?.issueCounters?.inactivity || 0);
+      acc.interruptionStats.lostFocusCount += Number(session?.interruptionStats?.lostFocusCount || 0);
+      acc.interruptionStats.recoveredCount += Number(session?.interruptionStats?.recoveredCount || 0);
+      acc.interruptionStats.savedMinutes += Number(session?.interruptionStats?.savedMinutes || 0);
+      acc.interruptionStats.patternDetections += Number(session?.interruptionStats?.patternDetections || 0);
+
+      const contextKey = String(session?.context?.activityType || "none_detected");
+      acc.contextCounts[contextKey] = (acc.contextCounts[contextKey] || 0) + 1;
+      return acc;
+    },
+    {
+      totalKeystrokes: 0,
+      totalTabSwitches: 0,
+      totalScrollDistance: 0,
+      totalIdleMs: 0,
+      timeOnTaskMs: 0,
+      totalDetections: 0,
+      issueCounters: {
+        procrastination: 0,
+        distraction: 0,
+        inactivity: 0
+      },
+      interruptionStats: {
+        lostFocusCount: 0,
+        recoveredCount: 0,
+        savedMinutes: 0,
+        patternDetections: 0
+      },
+      contextCounts: {}
+    }
+  );
+
+  const recentPayload = recent
+    ? {
+        tabId: recent.tabId,
+        url: recent.url,
+        title: recent.title,
+        updatedAt: recent.updatedAt,
+        context: recent.context,
+        signal: recent.lastSignal,
+        metrics: {
+          typingSpeed: Number(recent?.lastMetrics?.typingSpeed || 0),
+          idleDurationMs: Number(recent?.lastMetrics?.idleDurationMs || 0),
+          pauseDurationMs: Number(recent?.lastMetrics?.pauseDurationMs || 0),
+          repeatedActions: Number(recent?.lastMetrics?.repeatedActions || 0),
+          scrollSpeed: Number(recent?.lastMetrics?.scrollSpeed || 0),
+          tabSwitchesDelta: Number(recent?.lastMetrics?.tabSwitchesDelta || 0),
+          timeOnTaskMs: Number(recent?.aggregate?.timeOnTaskMs || 0),
+          totalKeystrokes: Number(recent?.aggregate?.totalKeystrokes || 0),
+          totalScrollDistance: Number(recent?.aggregate?.totalScrollDistance || 0)
+        },
+        issueCounters: recent.issueCounters,
+        interruptionStats: recent.interruptionStats
+      }
+    : null;
+
+  return {
+    updatedAt: Date.now(),
+    tetherEnabled: tetherEnabled !== false,
+    activeTabId,
+    activeWindowId,
+    recent: recentPayload,
+    overall
+  };
+}
+
 async function persistState(tabId, session) {
   const key = `nudge_tab_${tabId}`;
   const detailedSummary = `You lost focus ${session.interruptionStats?.lostFocusCount || 0} times, recovered ${session.interruptionStats?.recoveredCount || 0} times, and saved ~${session.interruptionStats?.savedMinutes || 0} minutes.`;
@@ -1160,6 +1261,14 @@ function domainFromUrl(url) {
   } catch {
     return "unknown";
   }
+}
+
+function isControlSurfaceDomain(value) {
+  const domain = String(value || "").toLowerCase();
+  if (!domain) {
+    return false;
+  }
+  return domain.includes("nudge-frontend-ten.vercel.app") || domain.includes("tether-frontend") || domain === "localhost";
 }
 
 function matchesAny(domain, patterns) {

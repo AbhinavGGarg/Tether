@@ -3,6 +3,8 @@ const NUDGE_DOCK_TAG = "nudge-extension-dock";
 const BRAND_NAME = "Tether";
 const LIVE_PAGE_SOURCE_URL = "https://nudge-frontend-ten.vercel.app/live-results";
 const STORAGE_TETHER_ENABLED_KEY = "tether_enabled";
+const EXTENSION_GLOBAL_STATE_EVENT = "TETHER_EXTENSION_GLOBAL_STATE";
+const CONTROL_SURFACE_HOST_TOKENS = ["nudge-frontend-ten.vercel.app", "tether-frontend", "localhost"];
 const BLOCKED_MONITOR_PAGES = [
   { host: "accounts.google.com", pathPrefix: "/v3/signin" },
   { host: "accounts.google.com", pathPrefix: "/ServiceLogin" },
@@ -57,6 +59,7 @@ let alertAudioContext = null;
 let alertAudioPrimed = false;
 let alertLoopIntervalId = null;
 let alertLoopStopTimeoutId = null;
+let globalStateBridgeIntervalId = null;
 let interruptionEvents = [];
 let interruptionStats = {
   lostFocusCount: 0,
@@ -89,6 +92,7 @@ function boot() {
   });
 
   window.addEventListener("message", onWindowMessage, false);
+  maybeStartGlobalStateBridge();
 
   safeAddRuntimeListener((message, _sender, sendResponse) => {
     if (!message || !message.type) {
@@ -186,6 +190,7 @@ function onWindowMessage(event) {
 
 function applyTetherPower(enabled) {
   tetherEnabled = Boolean(enabled);
+  maybeStartGlobalStateBridge();
 
   if (!tetherEnabled) {
     stopMonitoringLoops();
@@ -284,6 +289,58 @@ function stopMonitoringLoops() {
   if (uiPresenceIntervalId) {
     clearInterval(uiPresenceIntervalId);
     uiPresenceIntervalId = null;
+  }
+}
+
+function isControlSurfaceHost() {
+  const host = String(window.location.hostname || "").toLowerCase();
+  return CONTROL_SURFACE_HOST_TOKENS.some((token) => host.includes(token));
+}
+
+function postGlobalStateToWindow(payload) {
+  if (!isControlSurfaceHost()) {
+    return;
+  }
+  window.postMessage(
+    {
+      type: EXTENSION_GLOBAL_STATE_EVENT,
+      source: "tether-extension",
+      payload
+    },
+    "*"
+  );
+}
+
+function maybeStartGlobalStateBridge() {
+  if (extensionContextInvalidated || !isControlSurfaceHost()) {
+    return;
+  }
+
+  if (globalStateBridgeIntervalId) {
+    return;
+  }
+
+  const publish = () => {
+    safeRuntimeSendMessage({ type: "NUDGE_GET_GLOBAL_LIVE_STATE" }, (response) => {
+      if (!response || response.ok !== true) {
+        return;
+      }
+      const payload = {
+        ...(response.state || {}),
+        tetherEnabled: response.tetherEnabled !== false
+      };
+      postGlobalStateToWindow(payload);
+    });
+  };
+
+  publish();
+  globalStateBridgeIntervalId = window.setInterval(publish, 1500);
+}
+
+function stopGlobalStateBridge() {
+  if (globalStateBridgeIntervalId) {
+    window.clearInterval(globalStateBridgeIntervalId);
+    globalStateBridgeIntervalId = null;
   }
 }
 
@@ -763,6 +820,7 @@ function handleExtensionContextError(error) {
     return;
   }
   extensionContextInvalidated = true;
+  stopGlobalStateBridge();
   stopAlertLoop();
   stopMonitoringLoops();
   detachActivityListeners();

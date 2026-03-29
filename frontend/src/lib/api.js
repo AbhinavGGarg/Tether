@@ -161,6 +161,180 @@ function recordMetrics(sessionId, rawMetrics) {
   };
 }
 
+function syncExternalLiveState(sessionId, externalState) {
+  const session = readSession(sessionId);
+  if (!session || !externalState || typeof externalState !== "object") {
+    return null;
+  }
+
+  const recent = externalState.recent && typeof externalState.recent === "object" ? externalState.recent : null;
+  const overall = externalState.overall && typeof externalState.overall === "object" ? externalState.overall : null;
+  const syncState =
+    session.externalSync && typeof session.externalSync === "object"
+      ? session.externalSync
+      : {
+          lastRecentUpdatedAt: 0
+        };
+
+  if (overall) {
+    session.aggregate.totalKeystrokes = Math.max(
+      numberOrZero(session.aggregate.totalKeystrokes),
+      numberOrZero(overall.totalKeystrokes)
+    );
+    session.aggregate.totalTabSwitches = Math.max(
+      numberOrZero(session.aggregate.totalTabSwitches),
+      numberOrZero(overall.totalTabSwitches)
+    );
+    session.aggregate.totalScrollDistance = Math.max(
+      numberOrZero(session.aggregate.totalScrollDistance),
+      numberOrZero(overall.totalScrollDistance)
+    );
+    session.aggregate.totalIdleMs = Math.max(numberOrZero(session.aggregate.totalIdleMs), numberOrZero(overall.totalIdleMs));
+    session.aggregate.timeOnTaskMs = Math.max(
+      numberOrZero(session.aggregate.timeOnTaskMs),
+      numberOrZero(overall.timeOnTaskMs)
+    );
+    session.aggregate.totalDetections = Math.max(
+      numberOrZero(session.aggregate.totalDetections),
+      numberOrZero(overall.totalDetections)
+    );
+
+    if (overall.issueCounters && typeof overall.issueCounters === "object") {
+      session.issueCounters.procrastination = Math.max(
+        numberOrZero(session.issueCounters.procrastination),
+        numberOrZero(overall.issueCounters.procrastination)
+      );
+      session.issueCounters.distraction = Math.max(
+        numberOrZero(session.issueCounters.distraction),
+        numberOrZero(overall.issueCounters.distraction)
+      );
+      session.issueCounters.inactivity = Math.max(
+        numberOrZero(session.issueCounters.inactivity),
+        numberOrZero(overall.issueCounters.inactivity)
+      );
+    }
+
+    if (overall.interruptionStats && typeof overall.interruptionStats === "object") {
+      session.interruptionStats = {
+        lostFocusCount: Math.max(
+          numberOrZero(session.interruptionStats?.lostFocusCount),
+          numberOrZero(overall.interruptionStats.lostFocusCount)
+        ),
+        recoveredCount: Math.max(
+          numberOrZero(session.interruptionStats?.recoveredCount),
+          numberOrZero(overall.interruptionStats.recoveredCount)
+        ),
+        savedMinutes: Math.max(
+          numberOrZero(session.interruptionStats?.savedMinutes),
+          numberOrZero(overall.interruptionStats.savedMinutes)
+        ),
+        patternDetections: Math.max(
+          numberOrZero(session.interruptionStats?.patternDetections),
+          numberOrZero(overall.interruptionStats.patternDetections)
+        )
+      };
+    }
+
+    if (overall.contextCounts && typeof overall.contextCounts === "object") {
+      Object.entries(overall.contextCounts).forEach(([activityType, count]) => {
+        const key = String(activityType || "none_detected");
+        const value = numberOrZero(count);
+        session.contextsSeen[key] = Math.max(numberOrZero(session.contextsSeen[key]), value);
+      });
+    }
+  }
+
+  const recentUpdatedAt = numberOrZero(recent?.updatedAt);
+  if (recent && recentUpdatedAt > numberOrZero(syncState.lastRecentUpdatedAt)) {
+    const recentContext = {
+      domain: String(recent?.context?.domain || "unknown"),
+      url: String(recent?.context?.url || recent?.url || ""),
+      pageTitle: String(recent?.context?.pageTitle || recent?.title || ""),
+      category: String(recent?.context?.category || "unknown"),
+      activityType: String(recent?.context?.activityType || "none_detected"),
+      confidence: numberOrZero(recent?.context?.confidence),
+      evidence: Array.isArray(recent?.context?.evidence) ? recent.context.evidence.slice(0, 3) : []
+    };
+
+    const recentSignalRaw = recent?.signal && typeof recent.signal === "object" ? recent.signal : {};
+    const recentSignal = {
+      issueType: recentSignalRaw.issueType || null,
+      issueDisplayType: recentSignalRaw.issueDisplayType || null,
+      issueSeverity: recentSignalRaw.issueSeverity || null,
+      statusLabel: recentSignalRaw.statusLabel || "Live monitoring",
+      procrastinationScore: numberOrZero(recentSignalRaw.procrastinationScore),
+      distractionScore: numberOrZero(recentSignalRaw.distractionScore),
+      focusScore: numberOrZero(recentSignalRaw.focusScore),
+      focusImprovementPct: numberOrZero(recentSignalRaw.focusImprovementPct)
+    };
+
+    const recentMetrics = recent?.metrics && typeof recent.metrics === "object" ? recent.metrics : {};
+    const telemetry = {
+      typingSpeed: numberOrZero(recentMetrics.typingSpeed),
+      idleDurationMs: numberOrZero(recentMetrics.idleDurationMs),
+      pauseDurationMs: numberOrZero(recentMetrics.pauseDurationMs),
+      repeatedActions: numberOrZero(recentMetrics.repeatedActions),
+      deletionRate: 0,
+      scrollSpeed: numberOrZero(recentMetrics.scrollSpeed),
+      tabSwitchesDelta: numberOrZero(overall?.totalTabSwitches ?? recentMetrics.tabSwitchesDelta),
+      timeOnTaskMs: numberOrZero(overall?.timeOnTaskMs ?? recentMetrics.timeOnTaskMs),
+      totalKeystrokes: numberOrZero(overall?.totalKeystrokes ?? recentMetrics.totalKeystrokes)
+    };
+
+    session.lastContext = recentContext;
+    session.lastSignal = recentSignal;
+    session.lastMetrics = {
+      typingSpeed: telemetry.typingSpeed,
+      pauseDurationMs: telemetry.pauseDurationMs,
+      idleDurationMs: telemetry.idleDurationMs,
+      repeatedActions: telemetry.repeatedActions,
+      scrollSpeed: telemetry.scrollSpeed,
+      tabSwitchesDelta: telemetry.tabSwitchesDelta,
+      totalKeystrokes: telemetry.totalKeystrokes,
+      isPageActive: true
+    };
+
+    session.metricsHistory.push({
+      ts: Date.now(),
+      ...telemetry,
+      context: recentContext
+    });
+    session.metricsHistory = session.metricsHistory.slice(-240);
+
+    const activityKey = recentContext.activityType || "none_detected";
+    session.contextsSeen[activityKey] = numberOrZero(session.contextsSeen[activityKey]) + 1;
+    addTimeline(
+      session,
+      "external_sync",
+      `Synced live activity from ${recentContext.domain}`,
+      recentContext.pageTitle || recentContext.url
+    );
+
+    syncState.lastRecentUpdatedAt = recentUpdatedAt;
+  }
+
+  session.externalSync = syncState;
+  writeSession(session);
+
+  return {
+    context: session.lastContext,
+    signal: session.lastSignal,
+    telemetry: {
+      typingSpeed: numberOrZero(session.lastMetrics?.typingSpeed),
+      idleDurationMs: numberOrZero(session.lastMetrics?.idleDurationMs),
+      pauseDurationMs: numberOrZero(session.lastMetrics?.pauseDurationMs),
+      repeatedActions: numberOrZero(session.lastMetrics?.repeatedActions),
+      deletionRate: 0,
+      scrollSpeed: numberOrZero(session.lastMetrics?.scrollSpeed),
+      tabSwitchesDelta: numberOrZero(session.aggregate?.totalTabSwitches),
+      timeOnTaskMs: numberOrZero(session.aggregate?.timeOnTaskMs),
+      totalKeystrokes: numberOrZero(session.aggregate?.totalKeystrokes)
+    },
+    issueCounters: session.issueCounters,
+    interruptionStats: session.interruptionStats
+  };
+}
+
 function markInterventionApplied(sessionId, interventionId, action = "resume_task") {
   const session = readSession(sessionId);
   if (!session) {
@@ -323,7 +497,10 @@ function createSessionObject(sessionId, learnerName, startedAt) {
     },
     recentInterruptionPattern: false,
     pendingIgnoredReminder: null,
-    inactivityReminderStopped: false
+    inactivityReminderStopped: false,
+    externalSync: {
+      lastRecentUpdatedAt: 0
+    }
   };
 }
 
@@ -1215,6 +1392,7 @@ export {
   isRemoteMode,
   markInterventionApplied,
   recordMetrics,
+  syncExternalLiveState,
   startSession,
   submitAttempt
 };

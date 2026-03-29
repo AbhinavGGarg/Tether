@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { endSession, markInterventionApplied, recordMetrics, startSession } from "../lib/api";
+import { endSession, markInterventionApplied, recordMetrics, startSession, syncExternalLiveState } from "../lib/api";
 
 const GRADE_OPTIONS = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 const GRADE_SLOT_COUNT = 6;
@@ -8,6 +8,7 @@ const ASSESSMENT_SLOT_COUNT = 3;
 const RISK_LEVEL_ORDER = { Low: 1, Moderate: 2, High: 3 };
 const GITHUB_ZIP_URL = "https://github.com/AbhinavGGarg/Tether/archive/refs/heads/main.zip";
 const EXTENSION_POWER_BRIDGE_EVENT = "TETHER_EXTENSION_POWER";
+const EXTENSION_GLOBAL_STATE_EVENT = "TETHER_EXTENSION_GLOBAL_STATE";
 const REMINDER_DELAYS_MS = [0, 3 * 60 * 1000, 8 * 60 * 1000];
 const NOTIFICATION_MODE_CONFIG = {
   Normal: { inactivityMs: 90000, lostFocusMs: 120000 },
@@ -52,6 +53,7 @@ function WorkspacePage() {
   );
   const [notificationLogs, setNotificationLogs] = useState([]);
   const [notificationEvents, setNotificationEvents] = useState([]);
+  const [extensionLiveState, setExtensionLiveState] = useState(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -79,6 +81,36 @@ function WorkspacePage() {
       // Ignore storage access failures.
     }
   }, [sessionId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    function onExtensionGlobalState(event) {
+      if (event.source !== window) {
+        return;
+      }
+      const payload = event.data;
+      if (!payload || payload.type !== EXTENSION_GLOBAL_STATE_EVENT || payload.source !== "tether-extension") {
+        return;
+      }
+
+      const externalState = payload.payload && typeof payload.payload === "object" ? payload.payload : null;
+      if (!externalState) {
+        return;
+      }
+
+      setExtensionLiveState(externalState);
+
+      if (typeof externalState.tetherEnabled === "boolean") {
+        setTetherEnabled(externalState.tetherEnabled);
+      }
+    }
+
+    window.addEventListener("message", onExtensionGlobalState);
+    return () => window.removeEventListener("message", onExtensionGlobalState);
+  }, []);
 
   const [context, setContext] = useState({
     domain: window.location.hostname,
@@ -133,6 +165,31 @@ function WorkspacePage() {
   const tabSwitchesDeltaRef = useRef(0);
   const scrollDistanceDeltaRef = useRef(0);
   const lastScrollYRef = useRef(window.scrollY || 0);
+
+  const extensionRecentSite = extensionLiveState?.recent || null;
+  const extensionOverall = extensionLiveState?.overall || null;
+  const hasExtensionRecentFeed = Boolean(extensionRecentSite?.context?.domain || extensionRecentSite?.url);
+
+  useEffect(() => {
+    if (!sessionId || !extensionLiveState) {
+      return;
+    }
+
+    const synced = syncExternalLiveState(sessionId, extensionLiveState);
+    if (!synced) {
+      return;
+    }
+
+    if (synced.context) {
+      setContext(synced.context);
+    }
+    if (synced.signal) {
+      setSignal((prev) => ({ ...prev, ...synced.signal }));
+    }
+    if (synced.telemetry) {
+      setTelemetry((prev) => ({ ...prev, ...synced.telemetry }));
+    }
+  }, [extensionLiveState, sessionId]);
 
   const riskState = useMemo(
     () =>
@@ -344,6 +401,20 @@ function WorkspacePage() {
     }
 
     const timer = setInterval(() => {
+      if (hasExtensionRecentFeed && extensionLiveState) {
+        const synced = syncExternalLiveState(sessionId, extensionLiveState);
+        if (synced?.context) {
+          setContext(synced.context);
+        }
+        if (synced?.signal) {
+          setSignal((prev) => ({ ...prev, ...synced.signal }));
+        }
+        if (synced?.telemetry) {
+          setTelemetry((prev) => ({ ...prev, ...synced.telemetry }));
+        }
+        return;
+      }
+
       if (typeof document !== "undefined" && (document.visibilityState !== "visible" || !document.hasFocus())) {
         return;
       }
@@ -426,7 +497,7 @@ function WorkspacePage() {
     }, 2000);
 
     return () => clearInterval(timer);
-  }, [sessionId, tetherEnabled]);
+  }, [extensionLiveState, hasExtensionRecentFeed, sessionId, tetherEnabled]);
 
   useEffect(() => {
     if (!sessionId || !tetherEnabled) {
@@ -954,6 +1025,10 @@ function WorkspacePage() {
       return;
     }
 
+    if (extensionLiveState) {
+      syncExternalLiveState(sessionId, extensionLiveState);
+    }
+
     reminderSequenceRef.current.active = null;
     if (browserNotifications.enabled) {
       addBrowserNotificationEvent("session_completed", "Session completed", "Stopped all browser reminder sequences.");
@@ -989,6 +1064,16 @@ function WorkspacePage() {
   );
   const displayIntervention = enrichedActiveIntervention || interventionHistory[0] || null;
   const displayContext = normalizeDisplayContext(context);
+  const recentSourceUrl = extensionRecentSite?.context?.url || extensionRecentSite?.url || "";
+  const recentSourceDomain = extensionRecentSite?.context?.domain || "No external site yet";
+  const recentSourceActivity = extensionRecentSite?.context?.activityType || "none_detected";
+  const recentSourceUpdatedAt = extensionRecentSite?.updatedAt || 0;
+  const overallKeystrokes = Number(extensionOverall?.totalKeystrokes || telemetry.totalKeystrokes || 0);
+  const overallTimeOnTaskSeconds = Math.round(
+    Number(extensionOverall?.timeOnTaskMs || telemetry.timeOnTaskMs || 0) / 1000
+  );
+  const overallTabSwitches = Number(extensionOverall?.totalTabSwitches || telemetry.tabSwitchesDelta || 0);
+  const overallDetections = Number(extensionOverall?.totalDetections || 0);
 
   return (
     <main className="page-shell">
@@ -1154,6 +1239,26 @@ function WorkspacePage() {
                   <Metric label="Scroll speed" value={`${Math.round(telemetry.scrollSpeed)} px/s`} />
                   <Metric label="Tab switches" value={telemetry.tabSwitchesDelta} />
                   <Metric label="Time on task" value={`${Math.round(telemetry.timeOnTaskMs / 1000)}s`} />
+                </div>
+
+                <div className="timeline-box">
+                  <h4>Cross-Site Live Feed</h4>
+                  <p>
+                    <strong>Most recent source:</strong> {recentSourceDomain} ({recentSourceActivity.replaceAll("_", " ")})
+                  </p>
+                  {recentSourceUrl ? (
+                    <p>
+                      <strong>URL:</strong> {recentSourceUrl}
+                    </p>
+                  ) : null}
+                  <p>
+                    <strong>Last update:</strong>{" "}
+                    {recentSourceUpdatedAt ? new Date(recentSourceUpdatedAt).toLocaleTimeString() : "Waiting for extension feed"}
+                  </p>
+                  <p>
+                    <strong>Overall tracked:</strong> {overallKeystrokes} keystrokes, {overallTimeOnTaskSeconds}s time on task,{" "}
+                    {overallTabSwitches} tab switches, {overallDetections} issue detections.
+                  </p>
                 </div>
 
                 <div className="signal-box">
