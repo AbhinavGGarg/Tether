@@ -1126,16 +1126,6 @@ function WorkspacePage() {
               <article className="panel panel-main">
                 <h3>Live Context Engine</h3>
 
-                <div className="timeline-box">
-                  <h4>Live Page Source</h4>
-                  <p>{window.location.href}</p>
-                  <p style={{ marginTop: 8 }}>
-                    {context.activityType === "none_detected"
-                      ? "No supported context detected on this site yet."
-                      : "Context detected from your current page and live behavior."}
-                  </p>
-                </div>
-
                 <div className="metric-grid">
                   <Metric label="Activity" value={context.activityType} />
                   <Metric label="Category" value={context.category} />
