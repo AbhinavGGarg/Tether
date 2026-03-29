@@ -52,6 +52,7 @@ let lastAlertedIssueId = null;
 let isTabActiveByBackground = document.visibilityState === "visible" && document.hasFocus();
 let hasUserInteracted = false;
 let lastMouseActivityMessageAt = 0;
+let extensionContextInvalidated = false;
 let interruptionEvents = [];
 let interruptionStats = {
   lostFocusCount: 0,
@@ -72,7 +73,10 @@ function boot() {
     return;
   }
 
-  chrome.storage.onChanged.addListener((changes, areaName) => {
+  window.addEventListener("error", onWindowError, true);
+  window.addEventListener("unhandledrejection", onWindowUnhandledRejection, true);
+
+  safeAddStorageListener((changes, areaName) => {
     if (areaName !== "local" || !changes[STORAGE_TETHER_ENABLED_KEY]) {
       return;
     }
@@ -82,7 +86,7 @@ function boot() {
 
   window.addEventListener("message", onWindowMessage, false);
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  safeAddRuntimeListener((message, _sender, sendResponse) => {
     if (!message || !message.type) {
       return;
     }
@@ -124,12 +128,12 @@ function boot() {
     }
   });
 
-  chrome.storage.local.get([STORAGE_TETHER_ENABLED_KEY], (result) => {
+  safeStorageGet([STORAGE_TETHER_ENABLED_KEY], (result) => {
     const enabled = result?.[STORAGE_TETHER_ENABLED_KEY] !== false;
     applyTetherPower(enabled);
   });
 
-  chrome.runtime.sendMessage(
+  safeRuntimeSendMessage(
     {
       type: "NUDGE_TAB_READY",
       url: window.location.href,
@@ -140,9 +144,26 @@ function boot() {
         isTabActiveByBackground = response.active;
         renderDock();
       }
-      void chrome.runtime?.lastError;
     }
   );
+}
+
+function onWindowError(event) {
+  const candidate = event?.error || event?.message || "";
+  if (!isExtensionContextInvalidatedError(candidate)) {
+    return;
+  }
+  event.preventDefault();
+  handleExtensionContextError(candidate);
+}
+
+function onWindowUnhandledRejection(event) {
+  const candidate = event?.reason || "";
+  if (!isExtensionContextInvalidatedError(candidate)) {
+    return;
+  }
+  event.preventDefault();
+  handleExtensionContextError(candidate);
 }
 
 function onWindowMessage(event) {
@@ -156,9 +177,7 @@ function onWindowMessage(event) {
   }
 
   const enabled = payload.enabled !== false;
-  chrome.storage.local.set({ [STORAGE_TETHER_ENABLED_KEY]: enabled }, () => {
-    void chrome.runtime?.lastError;
-  });
+  safeStorageSet({ [STORAGE_TETHER_ENABLED_KEY]: enabled });
 }
 
 function applyTetherPower(enabled) {
@@ -194,7 +213,7 @@ function applyTetherPower(enabled) {
   if (!document.getElementById(NUDGE_DOCK_TAG)) {
     createDock();
   }
-  chrome.runtime.sendMessage(
+  safeRuntimeSendMessage(
     {
       type: "NUDGE_TAB_READY",
       url: window.location.href,
@@ -204,7 +223,6 @@ function applyTetherPower(enabled) {
       if (response && typeof response.active === "boolean") {
         isTabActiveByBackground = response.active;
       }
-      void chrome.runtime?.lastError;
       renderDock();
     }
   );
@@ -424,7 +442,7 @@ function onScroll() {
 function onVisibilityChange() {
   if (document.visibilityState === "hidden") {
     tabSwitchesDelta += 1;
-    chrome.runtime.sendMessage(
+    safeRuntimeSendMessage(
       {
         type: "NUDGE_ACTIVITY",
         eventType: "tab_hidden",
@@ -433,9 +451,7 @@ function onVisibilityChange() {
         url: window.location.href,
         title: document.title
       },
-      () => {
-        void chrome.runtime?.lastError;
-      }
+      () => {}
     );
   }
 }
@@ -454,7 +470,7 @@ function registerActivity(eventType = "interaction", clearIssue = true) {
     if (eventType === "mousemove") {
       lastMouseActivityMessageAt = now;
     }
-    chrome.runtime.sendMessage(
+    safeRuntimeSendMessage(
       {
         type: "NUDGE_ACTIVITY",
         eventType,
@@ -463,9 +479,7 @@ function registerActivity(eventType = "interaction", clearIssue = true) {
         url: window.location.href,
         title: document.title
       },
-      () => {
-        void chrome.runtime?.lastError;
-      }
+      () => {}
     );
   }
 
@@ -535,7 +549,7 @@ function triggerInactivityIssue(idleMs) {
   renderPopup();
   renderDock();
 
-  chrome.runtime.sendMessage(
+  safeRuntimeSendMessage(
     {
       type: "NUDGE_METRICS",
       metrics: {
@@ -561,10 +575,122 @@ function triggerInactivityIssue(idleMs) {
         interruptionStats
       }
     },
-    () => {
-      void chrome.runtime?.lastError;
-    }
+    () => {}
   );
+}
+
+function safeAddRuntimeListener(listener) {
+  if (extensionContextInvalidated) {
+    return;
+  }
+  try {
+    if (chrome?.runtime?.onMessage?.addListener) {
+      chrome.runtime.onMessage.addListener(listener);
+    }
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
+}
+
+function safeAddStorageListener(listener) {
+  if (extensionContextInvalidated) {
+    return;
+  }
+  try {
+    if (chrome?.storage?.onChanged?.addListener) {
+      chrome.storage.onChanged.addListener(listener);
+    }
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
+}
+
+function safeStorageGet(keys, callback) {
+  if (extensionContextInvalidated) {
+    return;
+  }
+  try {
+    if (!chrome?.storage?.local?.get) {
+      return;
+    }
+    chrome.storage.local.get(keys, (...args) => {
+      swallowLastRuntimeError();
+      if (typeof callback === "function") {
+        try {
+          callback(...args);
+        } catch (error) {
+          handleExtensionContextError(error);
+        }
+      }
+    });
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
+}
+
+function safeStorageSet(data) {
+  if (extensionContextInvalidated) {
+    return;
+  }
+  try {
+    if (!chrome?.storage?.local?.set) {
+      return;
+    }
+    chrome.storage.local.set(data, () => {
+      swallowLastRuntimeError();
+    });
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
+}
+
+function safeRuntimeSendMessage(payload, callback) {
+  if (extensionContextInvalidated) {
+    return;
+  }
+  try {
+    if (!chrome?.runtime?.sendMessage) {
+      return;
+    }
+    chrome.runtime.sendMessage(payload, (...args) => {
+      swallowLastRuntimeError();
+      if (typeof callback === "function") {
+        try {
+          callback(...args);
+        } catch (error) {
+          handleExtensionContextError(error);
+        }
+      }
+    });
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
+}
+
+function swallowLastRuntimeError() {
+  try {
+    void chrome.runtime?.lastError;
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
+}
+
+function handleExtensionContextError(error) {
+  if (!isExtensionContextInvalidatedError(error)) {
+    return;
+  }
+  extensionContextInvalidated = true;
+  stopMonitoringLoops();
+  detachActivityListeners();
+  window.removeEventListener("error", onWindowError, true);
+  window.removeEventListener("unhandledrejection", onWindowUnhandledRejection, true);
+  hidePopup();
+  removeDockAndPopup();
+}
+
+function isExtensionContextInvalidatedError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("Extension context invalidated");
 }
 
 function clearInactivityIssue() {
@@ -885,9 +1011,7 @@ function publishMetrics() {
   tabSwitchesDelta = 0;
   scrollDistanceDelta = 0;
 
-  chrome.runtime.sendMessage({ type: "NUDGE_METRICS", metrics }, () => {
-    void chrome.runtime?.lastError;
-  });
+  safeRuntimeSendMessage({ type: "NUDGE_METRICS", metrics }, () => {});
 }
 
 function ensureUiPresence() {
