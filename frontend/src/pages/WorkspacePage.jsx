@@ -8,6 +8,7 @@ const ASSESSMENT_SLOT_COUNT = 3;
 const RISK_LEVEL_ORDER = { Low: 1, Moderate: 2, High: 3 };
 const GITHUB_REPO_URL = "https://github.com/AbhinavGGarg/Tether";
 const GITHUB_ZIP_URL = "https://github.com/AbhinavGGarg/Tether/archive/refs/heads/main.zip";
+const EXTENSION_POWER_BRIDGE_EVENT = "TETHER_EXTENSION_POWER";
 const REMINDER_DELAYS_MS = [0, 3 * 60 * 1000, 8 * 60 * 1000];
 const NOTIFICATION_MODE_CONFIG = {
   Normal: { inactivityMs: 90000, lostFocusMs: 120000 },
@@ -52,6 +53,22 @@ function WorkspacePage() {
   );
   const [notificationLogs, setNotificationLogs] = useState([]);
   const [notificationEvents, setNotificationEvents] = useState([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const saved = window.localStorage.getItem("tether_enabled");
+      if (saved === "true") {
+        setTetherEnabled(true);
+      } else if (saved === "false") {
+        setTetherEnabled(false);
+      }
+    } catch {
+      // Ignore storage access failures.
+    }
+  }, []);
 
   const [context, setContext] = useState({
     domain: window.location.hostname,
@@ -240,6 +257,27 @@ function WorkspacePage() {
       setStartError("Could not start session. Try again.");
     } finally {
       setStartingSession(false);
+    }
+  }
+
+  function handleTetherPowerToggle(nextEnabled) {
+    setTetherEnabled(nextEnabled);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem("tether_enabled", nextEnabled ? "true" : "false");
+      } catch {
+        // Ignore storage access failures.
+      }
+
+      window.postMessage(
+        {
+          type: EXTENSION_POWER_BRIDGE_EVENT,
+          enabled: nextEnabled,
+          source: "tether-web-app",
+          ts: Date.now()
+        },
+        "*"
+      );
     }
   }
 
@@ -909,7 +947,7 @@ function WorkspacePage() {
               <input
                 type="checkbox"
                 checked={tetherEnabled}
-                onChange={(event) => setTetherEnabled(event.target.checked)}
+                onChange={(event) => handleTetherPowerToggle(event.target.checked)}
               />
             </label>
           ) : null}

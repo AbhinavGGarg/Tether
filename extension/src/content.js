@@ -80,6 +80,8 @@ function boot() {
     applyTetherPower(nextEnabled);
   });
 
+  window.addEventListener("message", onWindowMessage, false);
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || !message.type) {
       return;
@@ -135,6 +137,22 @@ function boot() {
       void chrome.runtime?.lastError;
     }
   );
+}
+
+function onWindowMessage(event) {
+  if (event.source !== window) {
+    return;
+  }
+
+  const payload = event.data;
+  if (!payload || payload.type !== "TETHER_EXTENSION_POWER") {
+    return;
+  }
+
+  const enabled = payload.enabled !== false;
+  chrome.storage.local.set({ [STORAGE_TETHER_ENABLED_KEY]: enabled }, () => {
+    void chrome.runtime?.lastError;
+  });
 }
 
 function applyTetherPower(enabled) {
