@@ -201,6 +201,7 @@ function applyTetherPower(enabled) {
     return;
   }
 
+  lastActionNote = "";
   lastActivityTime = Date.now();
   lastInteractionAt = lastActivityTime;
   lastInputAt = lastActivityTime;

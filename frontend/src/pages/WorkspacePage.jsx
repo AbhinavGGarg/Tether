@@ -303,6 +303,7 @@ function WorkspacePage() {
       setLiveInterventionDetail("");
       setFocusModeRunning(false);
       setFocusModeSeconds(0);
+      setFocusModeDuration(0);
       setSignal((prev) => ({
         ...prev,
         issueType: null,
@@ -310,6 +311,17 @@ function WorkspacePage() {
         issueSeverity: null,
         statusLabel: "Monitoring off"
       }));
+      setTelemetry({
+        typingSpeed: 0,
+        idleDurationMs: 0,
+        pauseDurationMs: 0,
+        repeatedActions: 0,
+        deletionRate: 0,
+        scrollSpeed: 0,
+        tabSwitchesDelta: 0,
+        timeOnTaskMs: 0,
+        totalKeystrokes: totalKeystrokesRef.current
+      });
       setImpactNote("Tether is off. No monitoring is running.");
       setBrowserNotificationStatus("Tether is off. Monitoring and reminders paused.");
       addBrowserNotificationEvent("tether_disabled", "Tether turned off", "All monitoring loops paused.");
@@ -320,6 +332,7 @@ function WorkspacePage() {
       ...prev,
       statusLabel: "Live monitoring"
     }));
+    setImpactNote("No intervention impact yet.");
     setBrowserNotificationStatus(
       browserNotifications.enabled ? `Browser notifications running in ${browserNotifications.mode} mode.` : "Browser notifications are off."
     );
