@@ -344,6 +344,9 @@ function WorkspacePage() {
     }
 
     const timer = setInterval(() => {
+      if (typeof document !== "undefined" && (document.visibilityState !== "visible" || !document.hasFocus())) {
+        return;
+      }
       const now = Date.now();
       const tenSecondsAgo = now - 10000;
       const twentySecondsAgo = now - 20000;
@@ -467,19 +470,27 @@ function WorkspacePage() {
     function onVisibilityChange() {
       if (document.visibilityState === "hidden") {
         tabSwitchesDeltaRef.current += 1;
+        return;
       }
+      lastInteractionRef.current = Date.now();
+    }
+
+    function onWindowFocus() {
+      lastInteractionRef.current = Date.now();
     }
 
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("scroll", onScroll, true);
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("visibilitychange", onVisibilityChange, true);
+    window.addEventListener("focus", onWindowFocus, true);
 
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("scroll", onScroll, true);
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("visibilitychange", onVisibilityChange, true);
+      window.removeEventListener("focus", onWindowFocus, true);
     };
   }, [sessionId, tetherEnabled]);
 
@@ -583,6 +594,9 @@ function WorkspacePage() {
     }
 
     const reminderTimer = window.setInterval(() => {
+      if (typeof document !== "undefined" && (document.visibilityState !== "visible" || !document.hasFocus())) {
+        return;
+      }
       const now = Date.now();
       const activeReminder = reminderSequenceRef.current.active;
 
@@ -974,6 +988,7 @@ function WorkspacePage() {
     Math.min(100, Math.round(((focusModeDuration - focusModeSeconds) / Math.max(1, focusModeDuration)) * 100))
   );
   const displayIntervention = enrichedActiveIntervention || interventionHistory[0] || null;
+  const displayContext = normalizeDisplayContext(context);
 
   return (
     <main className="page-shell">
@@ -1127,10 +1142,10 @@ function WorkspacePage() {
                 <h3>Live Context Engine</h3>
 
                 <div className="metric-grid">
-                  <Metric label="Activity" value={context.activityType} />
-                  <Metric label="Category" value={context.category} />
-                  <Metric label="Domain" value={context.domain} />
-                  <Metric label="Confidence" value={`${Math.round((context.confidence || 0) * 100)}%`} />
+                  <Metric label="Activity" value={displayContext.activityType} />
+                  <Metric label="Category" value={displayContext.category} />
+                  <Metric label="Domain" value={displayContext.domain} />
+                  <Metric label="Confidence" value={`${Math.round((displayContext.confidence || 0) * 100)}%`} />
                   <Metric label="Focus score" value={`${Math.round(signal.focusScore || 0)}%`} />
                   <Metric label="Typing speed" value={`${telemetry.typingSpeed} keys/s`} />
                   <Metric label="Idle" value={`${Math.round(telemetry.idleDurationMs / 1000)}s`} />
@@ -1817,6 +1832,30 @@ function riskClassName(level) {
     return "moderate";
   }
   return "high";
+}
+
+function normalizeDisplayContext(context) {
+  const host = String(context?.domain || (typeof window !== "undefined" ? window.location.hostname : "")).toLowerCase();
+  const isControlHost =
+    host.includes("nudge-frontend-ten.vercel.app") ||
+    host.includes("tether-frontend") ||
+    host === "localhost";
+
+  if (
+    isControlHost &&
+    String(context?.activityType || "") === "none_detected" &&
+    String(context?.category || "") === "unknown"
+  ) {
+    return {
+      ...context,
+      activityType: "control_panel",
+      category: "system",
+      confidence: Math.max(0.9, Number(context?.confidence || 0)),
+      domain: host || "control-host"
+    };
+  }
+
+  return context;
 }
 
 function parseGradeFromPortalLink(link, fallbackGrade = "B+") {
