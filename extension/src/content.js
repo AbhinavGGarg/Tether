@@ -55,6 +55,8 @@ let lastMouseActivityMessageAt = 0;
 let extensionContextInvalidated = false;
 let alertAudioContext = null;
 let alertAudioPrimed = false;
+let alertLoopIntervalId = null;
+let alertLoopStopTimeoutId = null;
 let interruptionEvents = [];
 let interruptionStats = {
   lostFocusCount: 0,
@@ -302,6 +304,7 @@ function removeDockAndPopup() {
   overlayBody = null;
   dockOpen = false;
   lastAlertedIssueId = null;
+  stopAlertLoop();
 }
 
 function ensureAlertAnimationStyle() {
@@ -336,46 +339,60 @@ function playSoftAlert(issueId) {
       ctx.resume().catch(() => {});
     }
 
-    const playTone = () => {
-      const now = ctx.currentTime + 0.01;
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.linearRampToValueAtTime(0.06, now + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
-      gain.connect(ctx.destination);
+    stopAlertLoop();
 
-      const tone1 = ctx.createOscillator();
-      tone1.type = "triangle";
-      tone1.frequency.setValueAtTime(740, now);
-      tone1.connect(gain);
-      tone1.start(now);
-      tone1.stop(now + 0.12);
-
-      const tone2 = ctx.createOscillator();
-      tone2.type = "triangle";
-      tone2.frequency.setValueAtTime(620, now + 0.13);
-      tone2.connect(gain);
-      tone2.start(now + 0.13);
-      tone2.stop(now + 0.26);
+    const playLoopTick = () => {
+      if (!issueActive || !currentIssue) {
+        stopAlertLoop();
+        return;
+      }
+      playAlertToneOnce(ctx);
     };
 
-    if (ctx.state === "running") {
-      playTone();
+    playLoopTick();
+    alertLoopIntervalId = window.setInterval(playLoopTick, 1100);
+    alertLoopStopTimeoutId = window.setTimeout(() => {
+      stopAlertLoop();
+    }, 12000);
+  } catch {
+    // Soft alert is best-effort only.
+  }
+}
+
+function playAlertToneOnce(ctx) {
+  try {
+    if (!ctx) {
+      return;
+    }
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+    if (ctx.state !== "running") {
       return;
     }
 
-    // If the browser resumes a tick later, retry once quickly.
-    window.setTimeout(() => {
-      try {
-        if (ctx.state === "running") {
-          playTone();
-        }
-      } catch {
-        // Best-effort alert only.
-      }
-    }, 120);
+    const now = ctx.currentTime + 0.01;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.06, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
+    gain.connect(ctx.destination);
+
+    const tone1 = ctx.createOscillator();
+    tone1.type = "triangle";
+    tone1.frequency.setValueAtTime(740, now);
+    tone1.connect(gain);
+    tone1.start(now);
+    tone1.stop(now + 0.12);
+
+    const tone2 = ctx.createOscillator();
+    tone2.type = "triangle";
+    tone2.frequency.setValueAtTime(620, now + 0.13);
+    tone2.connect(gain);
+    tone2.start(now + 0.13);
+    tone2.stop(now + 0.26);
   } catch {
-    // Soft alert is best-effort only.
+    // Best-effort alert only.
   }
 }
 
@@ -722,6 +739,17 @@ function primeAlertAudio() {
   }
 }
 
+function stopAlertLoop() {
+  if (alertLoopIntervalId) {
+    window.clearInterval(alertLoopIntervalId);
+    alertLoopIntervalId = null;
+  }
+  if (alertLoopStopTimeoutId) {
+    window.clearTimeout(alertLoopStopTimeoutId);
+    alertLoopStopTimeoutId = null;
+  }
+}
+
 function swallowLastRuntimeError() {
   try {
     void chrome.runtime?.lastError;
@@ -735,6 +763,7 @@ function handleExtensionContextError(error) {
     return;
   }
   extensionContextInvalidated = true;
+  stopAlertLoop();
   stopMonitoringLoops();
   detachActivityListeners();
   window.removeEventListener("error", onWindowError, true);
@@ -752,6 +781,7 @@ function clearInactivityIssue() {
   issueActive = false;
   currentIssue = null;
   lastAlertedIssueId = null;
+  stopAlertLoop();
   hidePopup();
   renderDock();
 }
@@ -783,6 +813,7 @@ function handleIssueAction(action) {
   }
   issueActive = false;
   currentIssue = null;
+  stopAlertLoop();
   hidePopup();
   renderDock();
 
@@ -1039,6 +1070,7 @@ function renderPopup() {
 }
 
 function hidePopup() {
+  stopAlertLoop();
   if (overlay) {
     overlay.style.display = "none";
   }
