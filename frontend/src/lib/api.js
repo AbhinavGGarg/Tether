@@ -869,29 +869,67 @@ function computeBehaviorSnapshot(session) {
 
 function buildImprovementSuggestions(session, contextBreakdown) {
   const suggestions = [];
-  const topContext = contextBreakdown[0]?.context;
+  const topContext = contextBreakdown[0]?.context || "current work";
+  const inactivityCount = Number(session.issueCounters?.inactivity || 0);
+  const distractionCount = Number(session.issueCounters?.distraction || 0);
+  const procrastinationCount = Number(session.issueCounters?.procrastination || 0);
+  const tabSwitches = Number(session.aggregate?.totalTabSwitches || 0);
+  const repeatedBursts = Number(session.aggregate?.repeatedActionBursts || 0);
+  const timeWastedMin = Math.max(
+    0,
+    Math.round(
+      (Number(session.aggregate?.totalIdleMs || 0) + repeatedBursts * 4000) / 60000
+    )
+  );
+  const avgIdleMs = session.metricsHistory.length
+    ? session.metricsHistory.reduce((sum, entry) => sum + Number(entry.idleDurationMs || 0), 0) / session.metricsHistory.length
+    : 0;
+  const avgIdleSeconds = Math.max(0, Math.round(avgIdleMs / 1000));
+  const appliedCount = session.interventions.filter((entry) =>
+    ["lock_in_2m", "refocus_timer", "break_steps", "try_new_approach", "resume_task"].includes(entry.userAction)
+  ).length;
+  const ignoredCount = session.interventions.filter((entry) => entry.userAction === "ignore").length;
+  const followThroughPct = session.interventions.length
+    ? Math.round((appliedCount / session.interventions.length) * 100)
+    : 0;
 
-  if (topContext && topContext !== "none_detected") {
-    suggestions.push(`Primary context: ${topContext}. Set one objective before each work block.`);
+  if (inactivityCount > 0 || avgIdleSeconds >= 25) {
+    suggestions.push(
+      `Priority 1 - Inactivity control: you hit ${inactivityCount} inactivity trigger(s) with an average idle window of ${avgIdleSeconds}s. As soon as inactivity appears, start Lock In within 10 seconds and complete one concrete step before touching another tab.`
+    );
   }
 
-  if ((session.issueCounters.procrastination || 0) > 0) {
-    suggestions.push("Use short single-task sprints to reduce context switching.");
+  if (tabSwitches >= 3 || procrastinationCount > 0) {
+    suggestions.push(
+      `Priority 2 - Context discipline: ${tabSwitches} tab switch(es) and ${procrastinationCount} procrastination signal(s) were detected. Run 2 focused blocks in ${topContext} with a single goal per block, and do not switch tabs until each goal is completed.`
+    );
   }
 
-  if ((session.issueCounters.distraction || 0) > 0) {
-    suggestions.push("When inactivity appears, run a 2-minute lock-in sprint immediately.");
+  if (repeatedBursts > 0 || distractionCount > 0) {
+    suggestions.push(
+      `Priority 3 - Reduce loops: repeated-action bursts (${repeatedBursts}) and distraction events (${distractionCount}) suggest effort without progress. Use “Break into Steps” and commit to a 3-step sequence: define, execute, verify.`
+    );
   }
 
-  if ((session.issueCounters.inactivity || 0) > 0) {
-    suggestions.push("Use Lock In right away when inactivity appears to restore momentum.");
+  if (session.interventions.length > 0) {
+    suggestions.push(
+      `Priority 4 - Intervention follow-through: you applied ${appliedCount}/${session.interventions.length} intervention(s) (${followThroughPct}% follow-through) and ignored ${ignoredCount}. Aim for at least 80% follow-through next session to maximize recovery.`
+    );
+  }
+
+  if (timeWastedMin > 0) {
+    suggestions.push(
+      `Priority 5 - Time recovery target: estimated drift cost was ~${timeWastedMin} minute(s). Set a hard target to recover at least half of that time next session using immediate lock-ins and fewer context switches.`
+    );
   }
 
   if (suggestions.length === 0) {
-    suggestions.push("Strong session. Keep using quick checkpoints to preserve momentum.");
+    suggestions.push(
+      "Strong session quality. Next level move: keep one written objective per work block and run one 2-minute lock-in checkpoint every 15 minutes to protect momentum."
+    );
   }
 
-  return suggestions.slice(0, 4);
+  return suggestions.slice(0, 6);
 }
 
 function addTimeline(session, eventType, label, details) {
